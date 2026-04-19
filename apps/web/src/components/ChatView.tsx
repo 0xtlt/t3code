@@ -1474,6 +1474,11 @@ export default function ChatView(props: ChatViewProps) {
     () => shortcutLabelForCommand(keybindings, "diff.toggle", nonTerminalShortcutLabelOptions),
     [keybindings, nonTerminalShortcutLabelOptions],
   );
+  const planSidebarShortcutLabel = useMemo(
+    () =>
+      shortcutLabelForCommand(keybindings, "planSidebar.toggle", nonTerminalShortcutLabelOptions),
+    [keybindings, nonTerminalShortcutLabelOptions],
+  );
   const onToggleDiff = useCallback(() => {
     if (!isServerThread) {
       return;
@@ -1906,6 +1911,9 @@ export default function ChatView(props: ChatViewProps) {
     handleInteractionModeChange(interactionMode === "plan" ? "default" : "plan");
   }, [handleInteractionModeChange, interactionMode]);
   const togglePlanSidebar = useCallback(() => {
+    if (!activePlan?.turnId && !sidebarProposedPlan?.turnId && !planSidebarOpen) {
+      return;
+    }
     setPlanSidebarOpen((open) => {
       if (open) {
         planSidebarDismissedForTurnRef.current =
@@ -1915,7 +1923,7 @@ export default function ChatView(props: ChatViewProps) {
       }
       return !open;
     });
-  }, [activePlan?.turnId, sidebarProposedPlan?.turnId]);
+  }, [activePlan?.turnId, sidebarProposedPlan?.turnId, planSidebarOpen]);
   const closePlanSidebar = useCallback(() => {
     setPlanSidebarOpen(false);
     planSidebarDismissedForTurnRef.current =
@@ -2282,6 +2290,13 @@ export default function ChatView(props: ChatViewProps) {
         return;
       }
 
+      if (command === "planSidebar.toggle") {
+        event.preventDefault();
+        event.stopPropagation();
+        togglePlanSidebar();
+        return;
+      }
+
       const scriptId = projectScriptIdFromCommand(command);
       if (!scriptId || !activeProject) return;
       const script = activeProject.scripts.find((entry) => entry.id === scriptId);
@@ -2305,6 +2320,7 @@ export default function ChatView(props: ChatViewProps) {
     keybindings,
     onToggleDiff,
     toggleTerminalVisibility,
+    togglePlanSidebar,
   ]);
 
   const onRevertToTurnCount = useCallback(
@@ -3362,6 +3378,7 @@ export default function ChatView(props: ChatViewProps) {
               handleRuntimeModeChange={handleRuntimeModeChange}
               handleInteractionModeChange={handleInteractionModeChange}
               togglePlanSidebar={togglePlanSidebar}
+              planSidebarShortcutLabel={planSidebarShortcutLabel}
               focusComposer={focusComposer}
               scheduleComposerFocus={scheduleComposerFocus}
               setThreadError={setThreadError}

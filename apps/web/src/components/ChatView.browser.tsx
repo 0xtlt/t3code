@@ -1384,6 +1384,25 @@ function dispatchChatNewShortcut(): void {
   );
 }
 
+async function dispatchPlanPanelShortcut(): Promise<void> {
+  const useMetaForMod = isMacPlatform(navigator.platform);
+  const target =
+    document.activeElement instanceof HTMLElement && document.activeElement.isConnected
+      ? document.activeElement
+      : window;
+  target.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      key: "p",
+      shiftKey: true,
+      metaKey: useMetaForMod,
+      ctrlKey: !useMetaForMod,
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+  await waitForLayout();
+}
+
 async function triggerChatNewShortcutUntilPath(
   router: ReturnType<typeof getRouter>,
   predicate: (pathname: string) => boolean,
@@ -4115,6 +4134,169 @@ describe("ChatView timeline estimator parity (full app)", () => {
         (path) => UUID_ROUTE_RE.test(path),
         "Route should have changed to a new draft thread UUID from the command palette.",
       );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("does not toggle the plan panel shortcut while terminal focus is active", async () => {
+    useTerminalStateStore.setState({
+      terminalStateByThreadKey: {
+        [THREAD_KEY]: {
+          terminalOpen: true,
+          terminalHeight: 280,
+          terminalIds: ["default"],
+          runningTerminalIds: [],
+          activeTerminalId: "default",
+          terminalGroups: [{ id: "group-default", terminalIds: ["default"] }],
+          activeTerminalGroupId: "group-default",
+        },
+      },
+      terminalLaunchContextByThreadKey: {},
+      terminalEventEntriesByKey: {},
+    });
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithLongProposedPlan(),
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          keybindings: [
+            {
+              command: "planSidebar.toggle",
+              shortcut: {
+                key: "p",
+                metaKey: false,
+                ctrlKey: false,
+                shiftKey: true,
+                altKey: false,
+                modKey: true,
+              },
+              whenAst: {
+                type: "not",
+                node: { type: "identifier", name: "terminalFocus" },
+              },
+            },
+          ],
+        };
+      },
+    });
+
+    try {
+      await waitForServerConfigToApply();
+      const terminalInput = await waitForElement(
+        () =>
+          document.querySelector<HTMLTextAreaElement>(
+            ".thread-terminal-drawer .xterm-helper-textarea",
+          ),
+        "Unable to find terminal textarea.",
+      );
+      terminalInput.focus();
+      await vi.waitFor(
+        () => {
+          expect(document.activeElement).toBe(terminalInput);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      // Precondition: the plan sidebar auto-opens from the proposed plan in the snapshot.
+      // Without this assertion a regression that only opens the sidebar on shortcut (instead of
+      // blocking it under terminal focus) would falsely pass the after-dispatch check below.
+      await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Close plan sidebar"]'),
+        "Plan sidebar did not auto-open before dispatching the shortcut.",
+      );
+
+      await dispatchPlanPanelShortcut();
+
+      expect(document.querySelector('button[aria-label="Close plan sidebar"]')).not.toBeNull();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("does not open the plan panel shortcut when no plan UI is available", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-plan-shortcut-empty" as MessageId,
+        targetText: "plan shortcut empty",
+      }),
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          keybindings: [
+            {
+              command: "planSidebar.toggle",
+              shortcut: {
+                key: "p",
+                metaKey: false,
+                ctrlKey: false,
+                shiftKey: true,
+                altKey: false,
+                modKey: true,
+              },
+              whenAst: {
+                type: "not",
+                node: { type: "identifier", name: "terminalFocus" },
+              },
+            },
+          ],
+        };
+      },
+    });
+
+    try {
+      await waitForServerConfigToApply();
+
+      await dispatchPlanPanelShortcut();
+
+      expect(findButtonByText("Expand plan")).toBeNull();
+      expect(document.querySelector('button[aria-label="Close plan sidebar"]')).toBeNull();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("opens the sheet variant of the plan panel on narrow layouts", async () => {
+    const mounted = await mountChatView({
+      viewport: COMPACT_FOOTER_VIEWPORT,
+      snapshot: createSnapshotWithLongProposedPlan(),
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          keybindings: [
+            {
+              command: "planSidebar.toggle",
+              shortcut: {
+                key: "p",
+                metaKey: false,
+                ctrlKey: false,
+                shiftKey: true,
+                altKey: false,
+                modKey: true,
+              },
+              whenAst: {
+                type: "not",
+                node: { type: "identifier", name: "terminalFocus" },
+              },
+            },
+          ],
+        };
+      },
+    });
+
+    try {
+      await waitForServerConfigToApply();
+
+      await dispatchPlanPanelShortcut();
+
+      const sheetPopup = await waitForElement(
+        () => document.querySelector<HTMLElement>('[data-slot="sheet-popup"]'),
+        "Plan panel sheet did not open.",
+      );
+      expect(sheetPopup.querySelector('button[aria-label="Close plan sidebar"]')).not.toBeNull();
     } finally {
       await mounted.cleanup();
     }

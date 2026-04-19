@@ -41,6 +41,12 @@ it.effect("parses keybinding rules", () =>
     });
     assert.strictEqual(parsedDiffToggle.command, "diff.toggle");
 
+    const parsedPlanSidebarToggle = yield* decode(KeybindingRule, {
+      key: "mod+shift+p",
+      command: "planSidebar.toggle",
+    });
+    assert.strictEqual(parsedPlanSidebarToggle.command, "planSidebar.toggle");
+
     const parsedCommandPalette = yield* decode(KeybindingRule, {
       key: "mod+k",
       command: "commandPalette.toggle",
@@ -87,9 +93,10 @@ it.effect("parses keybindings array payload", () =>
   Effect.gen(function* () {
     const parsed = yield* decode(KeybindingsConfig, [
       { key: "mod+j", command: "terminal.toggle" },
+      { key: "mod+shift+p", command: "planSidebar.toggle", when: "!terminalFocus" },
       { key: "mod+d", command: "terminal.split", when: "terminalFocus" },
     ]);
-    assert.lengthOf(parsed, 2);
+    assert.lengthOf(parsed, 3);
   }),
 );
 

@@ -166,6 +166,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
   showPlanToggle: boolean;
   planSidebarLabel: string;
   planSidebarOpen: boolean;
+  planSidebarShortcutLabel: string | null;
   onToggleInteractionMode: () => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
   onTogglePlanSidebar: () => void;
@@ -239,26 +240,42 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
       {props.showPlanToggle ? (
         <>
           <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
-          <Button
-            variant="ghost"
-            className={cn(
-              "shrink-0 whitespace-nowrap px-2 sm:px-3",
-              props.planSidebarOpen
-                ? "text-blue-400 hover:text-blue-300"
-                : "text-muted-foreground/70 hover:text-foreground/80",
-            )}
-            size="sm"
-            type="button"
-            onClick={props.onTogglePlanSidebar}
-            title={
-              props.planSidebarOpen
-                ? `Hide ${props.planSidebarLabel.toLowerCase()} sidebar`
-                : `Show ${props.planSidebarLabel.toLowerCase()} sidebar`
-            }
-          >
-            <ListTodoIcon />
-            <span className="sr-only sm:not-sr-only">{props.planSidebarLabel}</span>
-          </Button>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  className={cn(
+                    "shrink-0 whitespace-nowrap px-2 sm:px-3",
+                    props.planSidebarOpen
+                      ? "text-blue-400 hover:text-blue-300"
+                      : "text-muted-foreground/70 hover:text-foreground/80",
+                  )}
+                  size="sm"
+                  type="button"
+                  onClick={props.onTogglePlanSidebar}
+                  aria-label={
+                    props.planSidebarOpen
+                      ? `Hide ${props.planSidebarLabel.toLowerCase()} sidebar`
+                      : `Show ${props.planSidebarLabel.toLowerCase()} sidebar`
+                  }
+                >
+                  <ListTodoIcon />
+                  <span className="sr-only sm:not-sr-only">{props.planSidebarLabel}</span>
+                </Button>
+              }
+            />
+            <TooltipPopup side="top">
+              {(() => {
+                const base = props.planSidebarOpen
+                  ? `Hide ${props.planSidebarLabel.toLowerCase()} sidebar`
+                  : `Show ${props.planSidebarLabel.toLowerCase()} sidebar`;
+                return props.planSidebarShortcutLabel
+                  ? `${base} (${props.planSidebarShortcutLabel})`
+                  : base;
+              })()}
+            </TooltipPopup>
+          </Tooltip>
         </>
       ) : null}
     </>
@@ -445,6 +462,7 @@ export interface ChatComposerProps {
   handleRuntimeModeChange: (mode: RuntimeMode) => void;
   handleInteractionModeChange: (mode: ProviderInteractionMode) => void;
   togglePlanSidebar: () => void;
+  planSidebarShortcutLabel: string | null;
 
   focusComposer: () => void;
   scheduleComposerFocus: () => void;
@@ -516,6 +534,7 @@ export const ChatComposer = memo(
       handleRuntimeModeChange,
       handleInteractionModeChange,
       togglePlanSidebar,
+      planSidebarShortcutLabel,
       focusComposer,
       scheduleComposerFocus,
       setThreadError,
@@ -1968,6 +1987,7 @@ export const ChatComposer = memo(
                         showPlanToggle={showPlanSidebarToggle}
                         planSidebarLabel={planSidebarLabel}
                         planSidebarOpen={planSidebarOpen}
+                        planSidebarShortcutLabel={planSidebarShortcutLabel}
                         onToggleInteractionMode={toggleInteractionMode}
                         onRuntimeModeChange={handleRuntimeModeChange}
                         onTogglePlanSidebar={togglePlanSidebar}
