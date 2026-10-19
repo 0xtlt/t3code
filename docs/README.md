@@ -9,6 +9,7 @@
 - [Terminal history](./user/terminal.md)
 - [Source control](./user/source-control.md)
 - [Project settings](./user/project-settings.md)
+- [Container threads](./user/containers.md)
 - [Appearance and themes](./user/appearance.md)
 - [Keyboard shortcuts](./user/keybindings.md)
 - [SnapShots](./user/snap-shot.md)
@@ -52,6 +53,7 @@ source alone does not explain. Most code changes do not need an internal documen
 - [Mobile navigation](./internals/mobile-navigation.md)
 - [Mobile development lifecycle](./internals/mobile-development.md)
 - [Terminal runtime](./internals/terminal-runtime.md)
+- [Container threads](./internals/container-threads.md)
 - [Devices](./internals/devices.md)
 - [Voice input](./internals/voice-input.md)
 
