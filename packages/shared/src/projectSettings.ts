@@ -205,6 +205,18 @@ export function resolveNewThreadEnvMode(input: {
   return isNewProjectFolder ? "local" : configured;
 }
 
+/**
+ * Whether a new thread starts in a container: the project's setting, then its
+ * t3.json, then false. Servers without container support never get one, so a
+ * stale default cannot launch a thread the server would refuse.
+ */
+export function resolveNewThreadContainer(input: {
+  readonly projectSettings: ResolvedProjectSettings<ResolvedServerSettings>;
+  readonly containerThreadsSupported: boolean;
+}): boolean {
+  return input.containerThreadsSupported && input.projectSettings.settings.defaultThreadContainer;
+}
+
 export function withProjectSettingsOverrides(
   settings: Pick<ServerSettings, "projectSettingsOverrides">,
   projectId: ProjectId,

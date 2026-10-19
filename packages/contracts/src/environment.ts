@@ -101,6 +101,10 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadAutoSettlementScope: Schema.optionalKey(Schema.Boolean),
   threadRestartContinuation: Schema.optionalKey(Schema.Boolean),
   projectSettingsOverrides: Schema.optionalKey(Schema.Boolean),
+  /** Server can run threads in containers (`workspaceStrategy.container`, container RPCs). */
+  containerThreads: Schema.optionalKey(Schema.Boolean),
+  /** Server stores per-project secrets for container threads (`projectSecrets.*` RPCs). */
+  projectSecrets: Schema.optionalKey(Schema.Boolean),
   /**
    * Older
       servers decode the key away (unknown fields are stripped, not

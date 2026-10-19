@@ -1,6 +1,12 @@
 import * as Schema from "effect/Schema";
 
-import { IsoDateTime, NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  ForwardCompatibleArray,
+  IsoDateTime,
+  NonNegativeInt,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 
 /** Producers clamp free text to these before publishing so encoding never fails. */
 export const WORKTREE_SETUP_DETAIL_MAX_LENGTH = 200;
@@ -11,6 +17,7 @@ export const WorktreeSetupStageId = Schema.Literals([
   "fetch",
   "checkout",
   "submodules",
+  "container",
   "setup-script",
   "agent",
 ]);
@@ -55,7 +62,8 @@ export const WorktreeSetupSnapshot = Schema.Struct({
       terminalId: TrimmedNonEmptyString,
     }),
   ),
-  stages: Schema.Array(WorktreeSetupStage),
+  /** Drops stages this build does not know, so a newer server's stage list still decodes. */
+  stages: ForwardCompatibleArray(WorktreeSetupStage),
   error: Schema.NullOr(Schema.String.check(Schema.isMaxLength(WORKTREE_SETUP_ERROR_MAX_LENGTH))),
   sequence: NonNegativeInt,
 });
@@ -85,6 +93,7 @@ export const WORKTREE_SETUP_STAGE_ORDER: ReadonlyArray<WorktreeSetupStageId> = [
   "fetch",
   "checkout",
   "submodules",
+  "container",
   "setup-script",
   "agent",
 ];
@@ -97,6 +106,8 @@ export function worktreeSetupStageLabel(id: WorktreeSetupStageId): string {
       return "Check out files";
     case "submodules":
       return "Init submodules";
+    case "container":
+      return "Prepare container";
     case "setup-script":
       return "Run setup script";
     case "agent":

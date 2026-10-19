@@ -147,6 +147,14 @@
       "types": "./src/delayedStatus.ts",
       "default": "./src/delayedStatus.ts"
     },
+    "./state/container": {
+      "types": "./src/state/container.ts",
+      "default": "./src/state/container.ts"
+    },
+    "./state/project-secrets": {
+      "types": "./src/state/projectSecrets.ts",
+      "default": "./src/state/projectSecrets.ts"
+    },
     "./state/connections": {
       "types": "./src/state/connections.ts",
       "default": "./src/state/connections.ts"

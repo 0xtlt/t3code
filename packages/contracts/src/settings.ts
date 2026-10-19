@@ -19,6 +19,7 @@ import {
   TrimmedString,
 } from "./baseSchemas.ts";
 import { UsageLimitSourceId } from "./usageLimitSourceId.ts";
+import { ContainerRuntimeSettings } from "./container.ts";
 import { EnvironmentMachineKind, ThreadEnvMode, WorktreeSubmodules } from "./environment.ts";
 import { KeybindingShortcut } from "./keybindings.ts";
 import {
@@ -883,6 +884,7 @@ export const PROJECT_SCOPED_SERVER_SETTING_KEYS = [
   "defaultModelSelection",
   "defaultRuntimeMode",
   "defaultThreadEnvMode",
+  "defaultThreadContainer",
   "newWorktreesStartFromOrigin",
   "worktreeSubmodules",
   "defaultAutoPull",
@@ -926,6 +928,7 @@ export const ProjectSettingsOverrides = Schema.Struct({
   defaultModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
   defaultRuntimeMode: Schema.optionalKey(RuntimeMode),
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvMode),
+  defaultThreadContainer: Schema.optionalKey(Schema.Boolean),
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
   worktreeSubmodules: ForwardCompatibleOptional(WorktreeSubmodules),
   defaultAutoPull: Schema.optionalKey(Schema.Boolean),
@@ -1144,6 +1147,14 @@ export const ServerSettings = Schema.Struct({
    * so older clients, which require a literal here, keep decoding.
    */
   defaultThreadEnvMode: OmittedWhenNull(ThreadEnvMode),
+  /**
+   * Separate from `defaultThreadEnvMode` (rather than a third literal) so older
+   * clients, which decode that field as a required literal, keep decoding.
+   * Null defers to the repository's t3.json, then to false. A container thread
+   * always gets its own worktree.
+   */
+  defaultThreadContainer: OmittedWhenNull(Schema.Boolean),
+  containerRuntime: ContainerRuntimeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   newWorktreesStartFromOrigin: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(true)),
   ),
@@ -1428,6 +1439,15 @@ export const ServerSettingsPatch = Schema.Struct({
   backgroundActivityProfile: Schema.optionalKey(BackgroundActivityProfile),
   environmentIcon: Schema.optionalKey(Schema.NullOr(EnvironmentMachineKind)),
   defaultThreadEnvMode: Schema.optionalKey(Schema.NullOr(ThreadEnvMode)),
+  defaultThreadContainer: Schema.optionalKey(Schema.NullOr(Schema.Boolean)),
+  containerRuntime: Schema.optionalKey(
+    Schema.Struct({
+      engine: Schema.optionalKey(ContainerRuntimeSettings.fields.engine),
+      cpus: Schema.optionalKey(ContainerRuntimeSettings.fields.cpus),
+      memory: Schema.optionalKey(ContainerRuntimeSettings.fields.memory),
+      forwardEnv: Schema.optionalKey(ContainerRuntimeSettings.fields.forwardEnv),
+    }),
+  ),
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
   worktreeSubmodules: Schema.optionalKey(Schema.NullOr(WorktreeSubmodules)),
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),

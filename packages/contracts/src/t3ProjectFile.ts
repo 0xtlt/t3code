@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 
+import { T3ProjectContainerConfig } from "./container.ts";
 import { ThreadEnvMode, WorktreeSubmodules } from "./environment.ts";
 import { ProjectScriptIcon } from "./project.ts";
 import type { ProjectScopedServerSettingKey, ServerSettings } from "./settings.ts";
@@ -91,6 +92,18 @@ export const T3ProjectFile = Schema.Struct({
         'Where new threads start for this repository: "worktree" for a fresh git worktree, "local" for the current checkout. A per-project setting in T3 Code overrides this; when neither is set, the global default applies.',
     }),
   ),
+  defaultThreadContainer: Schema.optionalKey(
+    Schema.Boolean.annotate({
+      description:
+        "When true, new threads for this repository start in a container: a fresh git worktree mounted into an isolated container that runs the agent, terminals, and scripts. A per-project setting in T3 Code overrides this.",
+    }),
+  ),
+  container: Schema.optionalKey(
+    T3ProjectContainerConfig.annotate({
+      description:
+        "Reproducible environment for container threads. When it sets neither `image` nor `dockerfile`, .devcontainer/devcontainer.json is used if present, otherwise T3 Code's default image.",
+    }),
+  ),
   worktreeSubmodules: Schema.optionalKey(
     WorktreeSubmodules.annotate({
       description:
@@ -120,6 +133,7 @@ export type T3ProjectFile = typeof T3ProjectFile.Type;
 export const PROJECT_FILE_BACKED_SETTINGS = {
   defaultThreadEnvMode: { field: "defaultThreadEnvMode", builtIn: "local" },
   worktreeSubmodules: { field: "worktreeSubmodules", builtIn: "recursive" },
+  defaultThreadContainer: { field: "defaultThreadContainer", builtIn: false },
 } as const satisfies {
   // `providerInstances` is scoped per project but overrides field by field
   // rather than replacing a whole `ServerSettings` value (see its doc comment

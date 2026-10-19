@@ -27,6 +27,20 @@ import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcMiddleware from "effect/rpc/RpcMiddleware";
 import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
+  ContainerEngineStatus,
+  ContainerError,
+  ThreadContainerInput,
+  ThreadContainerStatus,
+} from "./container.ts";
+import {
+  ProjectSecretRemoveInput,
+  ProjectSecretSetInput,
+  ProjectSecretSummary,
+  ProjectSecretsError,
+  ProjectSecretsListInput,
+  ProjectSecretsListResult,
+} from "./projectSecrets.ts";
+import {
   CodexAuthCallbackInput,
   CodexAuthCallbackState,
   ProviderAuthCancelInput,
@@ -441,6 +455,15 @@ export const WS_METHODS = {
   terminalClear: "terminal.clear",
   terminalRestart: "terminal.restart",
   terminalClose: "terminal.close",
+
+  containerEngineStatus: "container.engineStatus",
+  containerThreadStatus: "container.threadStatus",
+  containerStopThread: "container.stopThread",
+  containerRebuildThread: "container.rebuildThread",
+
+  projectSecretsList: "projectSecrets.list",
+  projectSecretsSet: "projectSecrets.set",
+  projectSecretsRemove: "projectSecrets.remove",
 
   previewOpen: "preview.open",
   previewNavigate: "preview.navigate",
@@ -1503,6 +1526,48 @@ const WsPreviewCloseRpc = Rpc.make(WS_METHODS.previewClose, {
   error: Schema.Union([PreviewError, EnvironmentAuthorizationError]),
 });
 
+const WsContainerEngineStatusRpc = Rpc.make(WS_METHODS.containerEngineStatus, {
+  success: ContainerEngineStatus,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsContainerThreadStatusRpc = Rpc.make(WS_METHODS.containerThreadStatus, {
+  payload: ThreadContainerInput,
+  success: ThreadContainerStatus,
+  error: Schema.Union([ContainerError, EnvironmentAuthorizationError]),
+});
+
+const WsContainerStopThreadRpc = Rpc.make(WS_METHODS.containerStopThread, {
+  payload: ThreadContainerInput,
+  success: ThreadContainerStatus,
+  error: Schema.Union([ContainerError, EnvironmentAuthorizationError]),
+});
+
+/** Removes the thread's container so the next use recreates it from the current definition. */
+const WsContainerRebuildThreadRpc = Rpc.make(WS_METHODS.containerRebuildThread, {
+  payload: ThreadContainerInput,
+  success: ThreadContainerStatus,
+  error: Schema.Union([ContainerError, EnvironmentAuthorizationError]),
+});
+
+const WsProjectSecretsListRpc = Rpc.make(WS_METHODS.projectSecretsList, {
+  payload: ProjectSecretsListInput,
+  success: ProjectSecretsListResult,
+  error: Schema.Union([ProjectSecretsError, EnvironmentAuthorizationError]),
+});
+
+/** The value is write-only: the result carries the name and metadata, never the value. */
+const WsProjectSecretsSetRpc = Rpc.make(WS_METHODS.projectSecretsSet, {
+  payload: ProjectSecretSetInput,
+  success: ProjectSecretSummary,
+  error: Schema.Union([ProjectSecretsError, EnvironmentAuthorizationError]),
+});
+
+const WsProjectSecretsRemoveRpc = Rpc.make(WS_METHODS.projectSecretsRemove, {
+  payload: ProjectSecretRemoveInput,
+  error: Schema.Union([ProjectSecretsError, EnvironmentAuthorizationError]),
+});
+
 const WsPreviewListRpc = Rpc.make(WS_METHODS.previewList, {
   payload: PreviewListInput,
   success: PreviewListResult,
@@ -2006,6 +2071,13 @@ export const WsRpcGroup = RpcGroup.make(
   WsTerminalCloseRpc,
   WsSubscribeTerminalEventsRpc,
   WsSubscribeTerminalMetadataRpc,
+  WsContainerEngineStatusRpc,
+  WsContainerThreadStatusRpc,
+  WsContainerStopThreadRpc,
+  WsContainerRebuildThreadRpc,
+  WsProjectSecretsListRpc,
+  WsProjectSecretsSetRpc,
+  WsProjectSecretsRemoveRpc,
   WsPreviewOpenRpc,
   WsPreviewNavigateRpc,
   WsPreviewResizeRpc,

@@ -364,6 +364,11 @@ export const OrchestrationV2AppThread = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  /**
+   * Set at creation and never changed: the provider, terminals, and scripts of
+   * this thread run inside its container. Absent means false.
+   */
+  container: Schema.optional(Schema.Boolean),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   pullRequests: Schema.optional(Schema.Array(ThreadPullRequestLink)),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
@@ -499,17 +504,27 @@ export const OrchestrationV2ThreadLaunchWorkspaceStrategy = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("root"),
     branch: Schema.optional(TrimmedNonEmptyString),
+    /**
+     * Always rejected: the project root is shared, so it cannot be isolated.
+     * Carried so a client's request fails instead of decoding the flag away
+     * and silently running on the host.
+     */
+    container: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     type: Schema.Literal("existing_worktree"),
     worktreePath: TrimmedNonEmptyString,
     branch: Schema.optional(TrimmedNonEmptyString),
+    /** Run the thread in a container with only this worktree mounted. */
+    container: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     type: Schema.Literal("worktree"),
     baseRef: TrimmedNonEmptyString,
     branch: Schema.optional(TrimmedNonEmptyString),
     startFromOrigin: Schema.optional(Schema.Boolean),
+    /** Run the thread in a container with only the new worktree mounted. */
+    container: Schema.optional(Schema.Boolean),
   }),
 ]);
 export type OrchestrationV2ThreadLaunchWorkspaceStrategy =
@@ -1806,6 +1821,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  container: Schema.optional(Schema.Boolean),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   pullRequests: Schema.optional(Schema.Array(ThreadPullRequestLink)),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
@@ -2563,6 +2579,7 @@ export const OrchestrationV2Command = Schema.Union([
     interactionMode: ProviderInteractionMode,
     branch: Schema.NullOr(TrimmedNonEmptyString),
     worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+    container: Schema.optional(Schema.Boolean),
     importedNativeThread: Schema.optional(
       Schema.Struct({
         ref: Schema.Struct({

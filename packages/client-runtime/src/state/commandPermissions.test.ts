@@ -309,3 +309,37 @@ it.effect("rejects protected unary and streamed RPCs outside a guarded command",
     expect(writes).toBe(0);
   }),
 );
+
+it.effect(
+  "requires operate for container stop/rebuild and settings write for project secrets",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const grantOnly = (
+          scope: typeof AuthOrchestrationOperateScope | typeof AuthSettingsWriteScope,
+        ) => AsyncResult.success({ ...grant(false), scopes: [scope], permissions: [scope] });
+        const cases = [
+          [WS_METHODS.containerStopThread, AuthOrchestrationOperateScope, AuthSettingsWriteScope],
+          [
+            WS_METHODS.containerRebuildThread,
+            AuthOrchestrationOperateScope,
+            AuthSettingsWriteScope,
+          ],
+          [WS_METHODS.projectSecretsSet, AuthSettingsWriteScope, AuthOrchestrationOperateScope],
+          [WS_METHODS.projectSecretsRemove, AuthSettingsWriteScope, AuthOrchestrationOperateScope],
+        ] as const;
+        for (const [method, required, other] of cases) {
+          const command = createCommandPermissions(runtime, method);
+          registry.set(sessions(env), grantOnly(other));
+          expect(registry.get(command.permissionAtom(env))).toBe(false);
+          expect((yield* command.authorize(registry, env).pipe(Effect.flip))._tag).toBe(
+            "EnvironmentAuthorizationError",
+          );
+          registry.set(sessions(env), grantOnly(required));
+          expect(registry.get(command.permissionAtom(env))).toBe(true);
+          yield* command.authorize(registry, env);
+        }
+      }),
+    ),
+);

@@ -17,6 +17,12 @@ export interface AgentScopeShape {
   }) => Effect.Effect<AgentScopeCommand>;
   readonly oomKilled: (threadId: string) => Effect.Effect<boolean>;
   /**
+   * True when `wrap` moves the thread's processes into a container. Adapters
+   * ask because a container changes what they may launch: a script entry
+   * point or a host-only directory does not exist in there.
+   */
+  readonly inContainer: (threadId: string) => Effect.Effect<boolean>;
+  /**
    * Forgets the thread's scope. The session manager calls it before it opens
    * a provider session, so a scope only answers for the session that launched
    * it, even when the next session runs without one (Cursor, OpenCode).
@@ -33,6 +39,7 @@ export const AgentScope = Context.Reference<AgentScopeShape>("@t3tools/shared/Ag
   defaultValue: () => ({
     wrap: ({ command, args }) => Effect.succeed({ command, args }),
     oomKilled: () => Effect.succeed(false),
+    inContainer: () => Effect.succeed(false),
     clear: () => Effect.void,
   }),
 });

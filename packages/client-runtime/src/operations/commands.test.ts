@@ -402,6 +402,68 @@ describe("V2 environment commands", () => {
     }).pipe(Effect.provide(layerTestCrypto)),
   );
 
+  it.effect("carries the container flag into a new and an existing worktree launch", () =>
+    Effect.gen(function* () {
+      const launches: OrchestrationV2ThreadLaunchInput[] = [];
+      const supervisor = yield* makeSupervisor({ commands: [], projects: [], launches });
+      const message = (id: string) => ({
+        messageId: MessageId.make(id),
+        role: "user" as const,
+        text: "Go",
+        attachments: [],
+      });
+
+      yield* startThreadTurn({
+        commandId: CommandId.make("launch-container-new-worktree"),
+        threadId: v2ThreadId,
+        message: message("message-container-new"),
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        bootstrap: {
+          container: true,
+          prepareWorktree: { projectCwd: "/workspace/project", baseBranch: "main", branch: "f" },
+        },
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+      yield* startThreadTurn({
+        commandId: CommandId.make("launch-container-existing-worktree"),
+        threadId: v2ThreadId,
+        message: message("message-container-existing"),
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        bootstrap: {
+          container: true,
+          createThread: {
+            projectId: ProjectId.make("project-1"),
+            title: "Thread",
+            modelSelection: v2Projection.thread.modelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: "feature",
+            worktreePath: "/workspace/project-worktrees/feature",
+            createdAt: "2026-06-20T00:00:00.000Z",
+          },
+        },
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+      yield* startThreadTurn({
+        commandId: CommandId.make("launch-no-container"),
+        threadId: v2ThreadId,
+        message: message("message-no-container"),
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        bootstrap: {
+          prepareWorktree: { projectCwd: "/workspace/project", baseBranch: "main", branch: "f" },
+        },
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(launches[0]?.workspaceStrategy).toMatchObject({ type: "worktree", container: true });
+      expect(launches[1]?.workspaceStrategy).toMatchObject({
+        type: "existing_worktree",
+        container: true,
+      });
+      expect(launches[2]?.workspaceStrategy).not.toHaveProperty("container");
+    }).pipe(Effect.provide(layerTestCrypto)),
+  );
+
   it.effect("uses server-resolved delivery intent without fetching the full projection", () =>
     Effect.gen(function* () {
       const commands: OrchestrationV2Command[] = [];

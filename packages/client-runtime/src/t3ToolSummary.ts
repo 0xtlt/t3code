@@ -320,6 +320,15 @@ export function summarizeT3ToolCalls(
     case "project-delete":
       label = phrase("Deleted", "delete", quantity(countEntities(projectIds), "project"));
       break;
+    case "project-secret-list":
+      label = phrase("Listed", "list", `project secrets ${times}`);
+      break;
+    case "project-secret-set":
+      label = phrase("Saved", "save", quantity(selected.length, "project secret"));
+      break;
+    case "project-secret-delete":
+      label = phrase("Deleted", "delete", quantity(selected.length, "project secret"));
+      break;
     case "project-clone":
       label = phrase(
         "Cloned",

@@ -156,6 +156,8 @@ interface StartThreadBootstrap {
     readonly startFromOrigin?: boolean;
   };
   readonly runSetupScript?: boolean;
+  /** Run the thread in a container. Needs a worktree: `prepareWorktree` or `createThread.worktreePath`. */
+  readonly container?: boolean;
 }
 
 export interface StartThreadTurnInput extends ThreadCommandInput {
@@ -637,6 +639,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
     const existingProjection =
       bootstrap === undefined ? yield* getProjection(input.threadId) : null;
     const thread = bootstrap ?? existingProjection!.thread;
+    const container = input.bootstrap?.container === true ? { container: true } : {};
     const workspaceStrategy =
       prepareWorktree !== undefined
         ? {
@@ -646,12 +649,14 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
             ...(prepareWorktree.startFromOrigin === undefined
               ? {}
               : { startFromOrigin: prepareWorktree.startFromOrigin }),
+            ...container,
           }
         : bootstrap?.worktreePath
           ? {
               type: "existing_worktree" as const,
               worktreePath: bootstrap.worktreePath,
               ...(bootstrap.branch === null ? {} : { branch: bootstrap.branch }),
+              ...container,
             }
           : {
               type: "root" as const,

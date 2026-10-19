@@ -93,6 +93,8 @@ export interface EnvironmentThreadShell {
   readonly interactionMode: OrchestrationV2ThreadShell["interactionMode"];
   readonly branch: string | null;
   readonly worktreePath: string | null;
+  /** The thread runs in a container; absent means false. */
+  readonly container?: boolean;
   readonly lineage: OrchestrationV2ThreadShell["lineage"];
   readonly forkedFrom: OrchestrationV2ThreadShell["forkedFrom"];
   readonly activeProviderThreadId: OrchestrationV2ThreadShell["activeProviderThreadId"];
@@ -229,6 +231,7 @@ export function presentThreadShell(
     interactionMode: thread.interactionMode,
     branch: thread.branch,
     worktreePath: thread.worktreePath,
+    ...(thread.container === true ? { container: true } : {}),
     pullRequests: threadPullRequestsOf(thread),
     linkedPullRequest: thread.linkedPullRequest ?? null,
     branchPullRequest: thread.branchPullRequest ?? null,

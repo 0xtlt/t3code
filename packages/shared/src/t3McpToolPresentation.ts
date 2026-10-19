@@ -49,6 +49,9 @@ export type T3McpToolSummaryAction =
   | "project-update"
   | "project-delete"
   | "project-clone"
+  | "project-secret-list"
+  | "project-secret-set"
+  | "project-secret-delete"
   | "environment-read"
   | "environment-update"
   | "attachment-prepare"
@@ -320,6 +323,18 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   t3_project_update: tool(["Update", "Updating", "Updated", "a project"], "project-update"),
   t3_project_delete: tool(["Delete", "Deleting", "Deleted", "a project"], "project-delete"),
   t3_project_clone: tool(["Clone", "Cloning", "Cloned", "a repository"], "project-clone"),
+  t3_project_secret_list: tool(
+    ["List", "Listing", "Listed", "project secrets"],
+    "project-secret-list",
+  ),
+  t3_project_secret_set: tool(
+    ["Save", "Saving", "Saved", "a project secret"],
+    "project-secret-set",
+  ),
+  t3_project_secret_delete: tool(
+    ["Delete", "Deleting", "Deleted", "a project secret"],
+    "project-secret-delete",
+  ),
   t3_attachment_prepare_upload: tool(
     ["Prepare", "Preparing", "Prepared", "an attachment upload"],
     "attachment-prepare",

@@ -10,6 +10,7 @@ import { createModelSelection } from "./model.ts";
 import {
   clearProjectSettingsOverrides,
   hasProjectSettingsOverrides,
+  resolveNewThreadContainer,
   resolveNewThreadEnvMode,
   resolveProjectFileBackedSetting,
   resolveProjectSettings,
@@ -311,6 +312,46 @@ describe("resolveNewThreadEnvMode", () => {
     ]) {
       expect(resolveNewThreadEnvMode({ ...newProject, projectSettings })).toBe("worktree");
     }
+  });
+});
+
+describe("resolveNewThreadContainer", () => {
+  const resolve = (
+    settings: Parameters<typeof resolveProjectSettings>[0],
+    projectFile: Parameters<typeof resolveProjectSettings>[3],
+    containerThreadsSupported = true,
+  ) =>
+    resolveNewThreadContainer({
+      projectSettings: resolveProjectSettings(settings, projectId, null, projectFile),
+      containerThreadsSupported,
+    });
+
+  it("is off unless the environment, a project, or t3.json turns it on", () => {
+    expect(resolve(DEFAULT_SERVER_SETTINGS, null)).toBe(false);
+    expect(resolve({ ...DEFAULT_SERVER_SETTINGS, defaultThreadContainer: true }, null)).toBe(true);
+    expect(resolve(DEFAULT_SERVER_SETTINGS, { defaultThreadContainer: true })).toBe(true);
+  });
+
+  it("lets a project override win over t3.json and the environment", () => {
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      projectSettingsOverrides: { [projectId]: { defaultThreadContainer: false } },
+    };
+    expect(resolve(settings, { defaultThreadContainer: true })).toBe(false);
+    expect(
+      resolve(
+        {
+          ...DEFAULT_SERVER_SETTINGS,
+          defaultThreadContainer: false,
+          projectSettingsOverrides: { [projectId]: { defaultThreadContainer: true } },
+        },
+        { defaultThreadContainer: false },
+      ),
+    ).toBe(true);
+  });
+
+  it("stays off on a server that cannot run container threads", () => {
+    expect(resolve(DEFAULT_SERVER_SETTINGS, { defaultThreadContainer: true }, false)).toBe(false);
   });
 });
 
