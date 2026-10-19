@@ -46,7 +46,9 @@ import { parsePullRequestReference } from "@t3tools/client-runtime/pull-request-
 import { getSourceControlPresentation } from "../sourceControlPresentation";
 import { useComposerMenuProps } from "./chat/composerEventScope";
 import {
+  type EnvMode,
   deriveLocalBranchNameFromRemoteRef,
+  isNewWorktreeEnvMode,
   resolveBranchTriggerLabel,
   resolveBranchToolbarPrBranch,
   resolveBranchSelectionTarget,
@@ -82,7 +84,7 @@ interface BranchToolbarBranchSelectorProps {
   threadId: ThreadId;
   draftId?: DraftId;
   envLocked: boolean;
-  effectiveEnvModeOverride?: "local" | "worktree";
+  effectiveEnvModeOverride?: EnvMode;
   activeThreadBranchOverride?: string | null;
   onActiveThreadBranchOverrideChange?: (refName: string | null) => void;
   startFromOrigin: boolean;
@@ -163,6 +165,7 @@ export function BranchToolbarBranchSelector({
       activeWorktreePath,
       hasServerThread,
       draftThreadEnvMode: draftThread?.envMode,
+      threadContainer: serverThread?.container === true,
     });
 
   const setThreadBranch = (
@@ -239,7 +242,7 @@ export function BranchToolbarBranchSelector({
   const normalizedDeferredBranchQuery = deferredTrimmedBranchQuery.toLowerCase();
   const prReference = parsePullRequestReference(trimmedBranchQuery);
   const isSelectingWorktreeBase =
-    effectiveEnvMode === "worktree" && !envLocked && !activeWorktreePath;
+    isNewWorktreeEnvMode(effectiveEnvMode) && !envLocked && !activeWorktreePath;
   const checkoutPullRequestItemValue =
     canChangeThreadBranch && prReference && onCheckoutPullRequestRequest
       ? `__checkout_pull_request__:${prReference}`
@@ -488,7 +491,7 @@ export function BranchToolbarBranchSelector({
   useEffect(() => {
     if (
       threadStarted ||
-      effectiveEnvMode !== "worktree" ||
+      !isNewWorktreeEnvMode(effectiveEnvMode) ||
       activeWorktreePath ||
       activeThreadBranch ||
       !worktreeBaseBranchCandidate

@@ -92,7 +92,8 @@ const isPreviewAnnotationPayload = Schema.is(PreviewAnnotationPayloadSchema);
 
 export const COMPOSER_DRAFT_STORAGE_KEY = "t3code:composer-drafts:v1";
 const COMPOSER_DRAFT_STORAGE_VERSION = 9;
-const DraftThreadEnvModeSchema = Schema.Literals(["local", "worktree"]);
+// "container" only widens the persisted literal, so drafts saved before it existed still decode.
+const DraftThreadEnvModeSchema = Schema.Literals(["local", "worktree", "container"]);
 export type DraftThreadEnvMode = typeof DraftThreadEnvModeSchema.Type;
 
 export const DraftId = Schema.String.pipe(Schema.brand("DraftId"));
@@ -1259,10 +1260,21 @@ function normalizeDraftThreadEnvMode(
   value: unknown,
   fallbackWorktreePath: string | null,
 ): DraftThreadEnvMode {
-  if (value === "local" || value === "worktree") {
+  if (value === "local" || value === "worktree" || value === "container") {
     return value;
   }
   return fallbackWorktreePath ? "worktree" : "local";
+}
+
+export function resolveDraftThreadEnvMode(input: {
+  requested: DraftThreadEnvMode | undefined;
+  nextWorktreePath: string | null;
+  existing: DraftThreadEnvMode | undefined;
+}): DraftThreadEnvMode {
+  if (input.requested !== undefined) return input.requested;
+  // A container thread keeps its mode when a branch with a worktree is picked.
+  if (input.existing === "container") return "container";
+  return input.nextWorktreePath ? "worktree" : (input.existing ?? "local");
 }
 
 function projectDraftKey(projectRef: ScopedProjectRef): string {
@@ -1452,8 +1464,11 @@ function createDraftThreadState(
       options?.interactionMode ?? existingThread?.interactionMode ?? DEFAULT_INTERACTION_MODE,
     branch: nextBranch,
     worktreePath: nextWorktreePath,
-    envMode:
-      options?.envMode ?? (nextWorktreePath ? "worktree" : (existingThread?.envMode ?? "local")),
+    envMode: resolveDraftThreadEnvMode({
+      requested: options?.envMode,
+      nextWorktreePath,
+      existing: existingThread?.envMode,
+    }),
     startFromOrigin: nextStartFromOrigin,
     promotedTo: null,
   };
@@ -2668,8 +2683,11 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               interactionMode: options.interactionMode ?? existing.interactionMode,
               branch: nextBranch,
               worktreePath: nextWorktreePath,
-              envMode:
-                options.envMode ?? (nextWorktreePath ? "worktree" : (existing.envMode ?? "local")),
+              envMode: resolveDraftThreadEnvMode({
+                requested: options.envMode,
+                nextWorktreePath,
+                existing: existing.envMode,
+              }),
               startFromOrigin: nextStartFromOrigin,
               promotedTo: existing.promotedTo ?? null,
             };

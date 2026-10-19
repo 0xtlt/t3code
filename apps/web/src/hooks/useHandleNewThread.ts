@@ -20,7 +20,7 @@ import {
   getProjectOrderKey,
   selectProjectGroupingSettings,
 } from "../logicalProject";
-import { resolveNewThreadEnvMode, resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import {
   readProject,
   readProjects,
@@ -34,8 +34,10 @@ import {
   resolveNewDraftStartFromOrigin,
   resolveNewThreadModelSelectionOverride,
 } from "../lib/chatThreadActions";
+import { resolveNewThreadDraftEnvMode } from "../lib/newThreadEnvMode";
 import { readT3ProjectFile } from "../lib/t3ProjectFileDefaults";
 import { appAtomRegistry } from "../rpc/atomRegistry";
+import { readEnvironmentSupportsContainerThreads } from "../state/container";
 import { environmentServerConfigsAtom } from "../state/server";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
@@ -140,11 +142,14 @@ export function useNewThreadHandler() {
       });
     const resolveDefaultEnvMode = async (): Promise<DraftThreadEnvMode> => {
       const consultProjectFile =
-        project !== undefined && projectSettings.settings.defaultThreadEnvMode === null;
+        project !== undefined &&
+        (projectSettings.settings.defaultThreadEnvMode === null ||
+          projectSettings.settings.defaultThreadContainer === null);
       const projectFile = consultProjectFile
         ? await readT3ProjectFile(project.environmentId, project.workspaceRoot)
         : null;
-      return resolveNewThreadEnvMode({
+      return resolveNewThreadDraftEnvMode({
+        containerSupported: readEnvironmentSupportsContainerThreads(projectRef.environmentId),
         projectSettings: resolveProjectSettings(
           targetServerSettings,
           project?.id ?? null,

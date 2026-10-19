@@ -22,8 +22,27 @@ export interface EnvironmentOption {
   machine: EnvironmentMachineKind;
 }
 
-export const EnvMode = Schema.Literals(["local", "worktree"]);
+/**
+ * "container" is not a third kind of workspace on the wire (`workspaceStrategy.container`
+ * is a flag on a worktree launch); clients present it beside Local and Worktree because it
+ * is one choice to the user. A container thread always has its own worktree.
+ */
+export const EnvMode = Schema.Literals(["local", "worktree", "container"]);
 export type EnvMode = typeof EnvMode.Type;
+
+/** The env mode an existing thread was started in. */
+export function resolveThreadEnvMode(thread: {
+  worktreePath: string | null;
+  container?: boolean | undefined;
+}): EnvMode {
+  if (thread.container === true) return "container";
+  return thread.worktreePath ? "worktree" : "local";
+}
+
+/** Modes that start the thread in a fresh worktree of the selected base ref. */
+export function isNewWorktreeEnvMode(mode: EnvMode): boolean {
+  return mode !== "local";
+}
 
 const GENERIC_LOCAL_ENVIRONMENT_LABELS = new Set(["local", "local environment"]);
 
@@ -90,7 +109,14 @@ export function resolveContextStripLabelsCompact(input: {
 }
 
 export function resolveEnvModeLabel(mode: EnvMode): string {
-  return mode === "worktree" ? "New worktree" : "Current checkout";
+  switch (mode) {
+    case "container":
+      return "Container";
+    case "worktree":
+      return "New worktree";
+    case "local":
+      return "Current checkout";
+  }
 }
 
 export const WORKTREE_SUBMODULES_LABELS: Record<WorktreeSubmodules, string> = {
@@ -107,6 +133,7 @@ export function resolveLockedWorkspaceLabel(
   activeWorktreePath: string | null,
   effectiveEnvMode: EnvMode,
 ): string {
+  if (effectiveEnvMode === "container") return resolveEnvModeLabel("container");
   if (activeWorktreePath) return "Worktree";
   return effectiveEnvMode === "worktree" ? resolveEnvModeLabel("worktree") : "Local checkout";
 }
@@ -158,13 +185,27 @@ export function resolveEffectiveEnvMode(input: {
   hasServerThread: boolean;
   draftThreadEnvMode: EnvMode | undefined;
   preparingWorktree?: boolean;
+  /** The server thread runs in a container; its flag never changes after creation. */
+  threadContainer?: boolean;
 }): EnvMode {
-  const { activeWorktreePath, hasServerThread, draftThreadEnvMode, preparingWorktree } = input;
+  const {
+    activeWorktreePath,
+    hasServerThread,
+    draftThreadEnvMode,
+    preparingWorktree,
+    threadContainer,
+  } = input;
   if (!hasServerThread) {
+    if (draftThreadEnvMode === "container") {
+      return "container";
+    }
     if (activeWorktreePath) {
       return "local";
     }
     return draftThreadEnvMode === "worktree" ? "worktree" : "local";
+  }
+  if (threadContainer === true) {
+    return "container";
   }
   return activeWorktreePath || preparingWorktree ? "worktree" : "local";
 }
@@ -175,6 +216,9 @@ export function resolveDraftEnvModeAfterBranchChange(input: {
   effectiveEnvMode: EnvMode;
 }): EnvMode {
   const { nextWorktreePath, currentWorktreePath, effectiveEnvMode } = input;
+  if (effectiveEnvMode === "container") {
+    return "container";
+  }
   if (nextWorktreePath) {
     return "worktree";
   }
@@ -191,7 +235,7 @@ export function resolveBranchToolbarValue(input: {
   currentGitBranch: string | null;
 }): string | null {
   const { envMode, activeWorktreePath, activeThreadBranch, currentGitBranch } = input;
-  if (envMode === "worktree" && !activeWorktreePath) {
+  if (isNewWorktreeEnvMode(envMode) && !activeWorktreePath) {
     return activeThreadBranch ?? currentGitBranch;
   }
   return currentGitBranch ?? activeThreadBranch;
@@ -214,7 +258,7 @@ export function resolveBranchTriggerLabel(input: {
   if (!resolvedActiveBranch) {
     return "Select ref";
   }
-  if (effectiveEnvMode === "worktree" && !activeWorktreePath) {
+  if (isNewWorktreeEnvMode(effectiveEnvMode) && !activeWorktreePath) {
     const baseRef =
       startFromOrigin && resolvedActiveBranchIsRemote === false
         ? `origin/${resolvedActiveBranch}`

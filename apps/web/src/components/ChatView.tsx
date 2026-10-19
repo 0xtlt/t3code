@@ -351,6 +351,7 @@ import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useEnvironmentDisconnectDelay } from "../hooks/useEnvironmentDisconnectDelay";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { useKnownTerminalSessions, useThreadRunningTerminalIds } from "../state/terminalSessions";
+import { useEnvironmentSupportsContainerThreads } from "../state/container";
 import { useEnvironmentQuery } from "../state/query";
 import { useEnvironmentScope } from "~/state/session";
 import {
@@ -427,6 +428,7 @@ import { ThreadDetailsPanel } from "./chat/ThreadDetailsPanel";
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import {
   resolveEffectiveEnvMode,
+  resolveEnvModeLabel,
   resolveLocalCheckoutBranchMismatch,
   shouldShowComposerContextStrip,
   shouldShowEnvironmentIndicator,
@@ -4591,6 +4593,7 @@ export default function ChatView(props: ChatViewProps) {
     hasServerThread: isServerThread,
     draftThreadEnvMode: isLocalDraftThread ? draftThread?.envMode : undefined,
     preparingWorktree: isPreparingWorktree,
+    threadContainer: serverThread?.container === true,
   });
   const canOverrideServerThreadEnvMode = Boolean(
     isServerThread &&
@@ -4635,6 +4638,7 @@ export default function ChatView(props: ChatViewProps) {
     requestedEnvMode: envMode,
     isGitRepo,
   });
+  const containerThreadsSupported = useEnvironmentSupportsContainerThreads(environmentId);
   const localCheckoutBranchMismatch = isServerThread
     ? resolveLocalCheckoutBranchMismatch({
         effectiveEnvMode: envMode,
@@ -6289,16 +6293,24 @@ export default function ChatView(props: ChatViewProps) {
     const threadIdForSend = activeThread.id;
     const isFirstMessage = !sendQueuesBehindSetup && (!isServerThread || activeMessageCount === 0);
     const baseBranchForWorktree =
-      isFirstMessage && sendEnvMode === "worktree" && !activeThread.worktreePath
+      isFirstMessage && sendEnvMode !== "local" && !activeThread.worktreePath
         ? activeThreadBranch
         : null;
 
-    // In worktree mode, require an explicit base branch so we don't silently
+    // In worktree and container mode, require an explicit base branch so we don't silently
     // fall back to local execution when branch selection is missing.
     const shouldCreateWorktree =
-      isFirstMessage && sendEnvMode === "worktree" && !activeThread.worktreePath;
+      isFirstMessage && sendEnvMode !== "local" && !activeThread.worktreePath;
     if (shouldCreateWorktree && !activeThreadBranch) {
-      setThreadError(threadIdForSend, "Select a base branch before sending in New worktree mode.");
+      setThreadError(
+        threadIdForSend,
+        `Select a base branch before sending in ${resolveEnvModeLabel(sendEnvMode)} mode.`,
+      );
+      return;
+    }
+    // Never run a container thread on the host instead: stop here.
+    if (isFirstMessage && sendEnvMode === "container" && !containerThreadsSupported) {
+      setThreadError(threadIdForSend, "This environment can't run container threads.");
       return;
     }
 
@@ -6921,6 +6933,7 @@ export default function ChatView(props: ChatViewProps) {
                     runSetupScript: true,
                   }
                 : {}),
+              ...(sendEnvMode === "container" ? { container: true } : {}),
             }
           : undefined;
       const backgroundThreadRef =
@@ -7520,7 +7533,7 @@ export default function ChatView(props: ChatViewProps) {
           envMode: mode,
           newWorktreesStartFromOrigin: activeProjectSettings.settings.newWorktreesStartFromOrigin,
         }),
-        ...(mode === "worktree" && draftThread?.worktreePath ? { worktreePath: null } : {}),
+        ...(mode !== "local" && draftThread?.worktreePath ? { worktreePath: null } : {}),
       });
     }
     scheduleComposerFocus();
@@ -7860,6 +7873,7 @@ export default function ChatView(props: ChatViewProps) {
             activeThreadEnvironmentId={activeThread.environmentId}
             activeThreadId={activeThread.id}
             isServerThread={isServerThread}
+            isContainerThread={serverThread?.container === true}
             activeThreadTitle={activeThread.title}
             activeProject={activeProject ?? null}
             parentThreadLink={parentThreadLink}

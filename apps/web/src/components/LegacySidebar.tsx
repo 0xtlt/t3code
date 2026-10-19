@@ -213,6 +213,7 @@ import {
   getProjectOrderKey,
   selectProjectGroupingSettings,
 } from "../logicalProject";
+import { resolveThreadEnvMode } from "./BranchToolbar.logic";
 import type { SidebarThreadSummary } from "../types";
 import {
   buildPhysicalToLogicalProjectKeyMap,
@@ -2183,7 +2184,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           handleNewThread(scopeProjectRef(thread.environmentId, thread.projectId), {
             branch: thread.branch,
             worktreePath: thread.worktreePath,
-            envMode: thread.worktreePath ? "worktree" : "local",
+            envMode: resolveThreadEnvMode(thread),
             startFromOrigin: false,
           }),
         );

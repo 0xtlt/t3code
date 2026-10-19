@@ -16,7 +16,7 @@ import {
   type VcsStatusResult,
 } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
-import { FolderGit2Icon, TerminalIcon } from "lucide-react";
+import { ContainerIcon, FolderGit2Icon, TerminalIcon } from "lucide-react";
 import { useEnvironment, usePrimaryEnvironmentId } from "../state/environments";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { useProject } from "../state/entities";
@@ -777,17 +777,19 @@ export function ThreadTerminalStatusButton({
 export function ThreadWorktreeIndicator({
   thread,
 }: {
-  thread: Pick<SidebarThreadSummary, "id" | "branch" | "worktreePath">;
+  thread: Pick<SidebarThreadSummary, "id" | "branch" | "worktreePath" | "container">;
 }) {
   const worktreePath = thread.worktreePath?.trim();
   if (!worktreePath) {
     return null;
   }
 
+  const isContainer = thread.container === true;
   const displayPath = formatWorktreePathForDisplay(worktreePath);
+  const label = isContainer ? "Container" : "Worktree";
   const tooltip = thread.branch
-    ? `Worktree: ${displayPath} (${thread.branch})`
-    : `Worktree: ${displayPath}`;
+    ? `${label}: ${displayPath} (${thread.branch})`
+    : `${label}: ${displayPath}`;
 
   return (
     <Tooltip>
@@ -801,7 +803,11 @@ export function ThreadWorktreeIndicator({
           />
         }
       >
-        <FolderGit2Icon className="size-3 text-muted-foreground/40" />
+        {isContainer ? (
+          <ContainerIcon className="size-3 text-muted-foreground/40" />
+        ) : (
+          <FolderGit2Icon className="size-3 text-muted-foreground/40" />
+        )}
       </TooltipTrigger>
       <TooltipPopup side="top">{tooltip}</TooltipPopup>
     </Tooltip>

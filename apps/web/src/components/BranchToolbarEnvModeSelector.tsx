@@ -1,6 +1,7 @@
 import { ComposerSelectControl } from "./chat/ComposerControl";
 import { ComposerContextLabel } from "./ComposerContextLabel";
-import { FolderGit2Icon, FolderGitIcon, FolderIcon } from "lucide-react";
+import type { EnvironmentId } from "@t3tools/contracts";
+import { ContainerIcon, FolderGit2Icon, FolderGitIcon, FolderIcon } from "lucide-react";
 import { memo, type MouseEvent as ReactMouseEvent } from "react";
 
 import {
@@ -10,6 +11,7 @@ import {
   type EnvMode,
 } from "./BranchToolbar.logic";
 import { useComposerMenuProps } from "./chat/composerEventScope";
+import { ContainerSelectItem } from "./ContainerEnvModeItems";
 import { PreviousWorktreeItemContent } from "./PreviousWorktreeItemContent";
 import {
   Select,
@@ -27,6 +29,8 @@ import { primaryServerKeybindingsAtom } from "../state/server";
 const PREVIOUS_WORKTREE_SELECT_VALUE = "previous-worktree";
 
 interface BranchToolbarEnvModeSelectorProps {
+  /** Set when the environment can run container threads; the Container choice is hidden without it. */
+  containerEnvironmentId?: EnvironmentId | null;
   forceNewWorktree?: boolean;
   envLocked: boolean;
   effectiveEnvMode: EnvMode;
@@ -37,7 +41,24 @@ interface BranchToolbarEnvModeSelectorProps {
   onUsePreviousWorktree?: () => void;
 }
 
+function EnvModeIcon({
+  mode,
+  activeWorktreePath,
+}: {
+  mode: EnvMode;
+  activeWorktreePath: string | null;
+}) {
+  if (mode === "container") return <ContainerIcon className="size-3" />;
+  if (mode === "worktree") return <FolderGit2Icon className="size-3" />;
+  return activeWorktreePath ? (
+    <FolderGitIcon className="size-3" />
+  ) : (
+    <FolderIcon className="size-3" />
+  );
+}
+
 export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSelector({
+  containerEnvironmentId = null,
   forceNewWorktree = false,
   envLocked,
   effectiveEnvMode,
@@ -59,6 +80,9 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
       label: resolveCurrentWorkspaceLabel(activeWorktreePath),
     },
     { value: "worktree", label: resolveEnvModeLabel("worktree") },
+    ...(containerEnvironmentId !== null || effectiveEnvMode === "container"
+      ? [{ value: "container", label: resolveEnvModeLabel("container") }]
+      : []),
     ...(showPreviousWorktree && previousWorktreeLabel
       ? [{ value: PREVIOUS_WORKTREE_SELECT_VALUE, label: previousWorktreeLabel }]
       : []),
@@ -76,7 +100,9 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
         className="inline-flex h-7 min-w-0 items-center gap-1 border border-transparent px-1.75 font-normal text-muted-foreground/70 text-xs sm:h-6"
         data-composer-context-control
       >
-        {activeWorktreePath ? (
+        {effectiveEnvMode === "container" ? (
+          <ContainerIcon className="size-3" />
+        ) : activeWorktreePath ? (
           <FolderGitIcon className="size-3" />
         ) : effectiveEnvMode === "worktree" ? (
           <FolderGit2Icon className="size-3" />
@@ -129,21 +155,15 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
             />
           }
         >
-          {effectiveEnvMode === "worktree" ? (
-            <FolderGit2Icon className="size-3" />
-          ) : activeWorktreePath ? (
-            <FolderGitIcon className="size-3" />
-          ) : (
-            <FolderIcon className="size-3" />
-          )}
+          <EnvModeIcon mode={effectiveEnvMode} activeWorktreePath={activeWorktreePath} />
           <ComposerContextLabel>
             <SelectValue />
           </ComposerContextLabel>
         </TooltipTrigger>
         <TooltipPopup>
-          {effectiveEnvMode === "worktree"
-            ? resolveEnvModeLabel("worktree")
-            : resolveCurrentWorkspaceLabel(activeWorktreePath)}
+          {effectiveEnvMode === "local"
+            ? resolveCurrentWorkspaceLabel(activeWorktreePath)
+            : resolveEnvModeLabel(effectiveEnvMode)}
           {shortcutLabel ? ` · ${shortcutLabel}` : null}
         </TooltipPopup>
       </Tooltip>
@@ -170,6 +190,9 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
               {resolveEnvModeLabel("worktree")}
             </span>
           </SelectItem>
+          {containerEnvironmentId !== null ? (
+            <ContainerSelectItem environmentId={containerEnvironmentId} />
+          ) : null}
           {showPreviousWorktree && previousWorktreeLabel ? (
             <SelectItem value={PREVIOUS_WORKTREE_SELECT_VALUE}>
               <PreviousWorktreeItemContent branch={previousWorktreeBranch} />

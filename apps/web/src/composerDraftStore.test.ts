@@ -73,6 +73,7 @@ import {
   type ComposerFileAttachment,
   type ComposerImageAttachment,
   composerFileNeedsReattach,
+  resolveDraftThreadEnvMode,
   partializeComposerDraftStoreState,
   useComposerDraftStore,
   DraftId,
@@ -1243,6 +1244,52 @@ describe("composerDraftStore project draft thread mapping", () => {
 
   beforeEach(() => {
     resetComposerDraftStore();
+  });
+
+  it("keeps a container draft in container mode when a branch with a worktree is picked", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId, envMode: "container" });
+    store.setProjectDraftThreadId(projectRef, draftId, {
+      threadId,
+      branch: "feature/x",
+      worktreePath: "/tmp/wt",
+    });
+
+    expect(useComposerDraftStore.getState().getDraftThread(draftId)?.envMode).toBe("container");
+  });
+
+  it("round-trips container drafts and still decodes drafts saved before containers existed", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId, envMode: "container" });
+    store.setProjectDraftThreadId(otherProjectRef, otherDraftId, {
+      threadId: otherThreadId,
+      branch: "feature/y",
+      worktreePath: "/tmp/old-wt",
+      envMode: "worktree",
+    });
+    const persisted = partializeComposerDraftStoreState(useComposerDraftStore.getState());
+    const options = (
+      useComposerDraftStore.persist as unknown as {
+        getOptions: () => {
+          merge: (
+            persistedState: unknown,
+            currentState: ReturnType<typeof useComposerDraftStore.getState>,
+          ) => ReturnType<typeof useComposerDraftStore.getState>;
+        };
+      }
+    ).getOptions();
+
+    const hydrated = options.merge(persisted, useComposerDraftStore.getInitialState());
+    expect(hydrated.draftThreadsByThreadKey[draftId]?.envMode).toBe("container");
+    expect(hydrated.draftThreadsByThreadKey[otherDraftId]?.envMode).toBe("worktree");
+
+    // A draft written by an older client may have no envMode at all.
+    const legacy = structuredClone(persisted) as unknown as {
+      draftThreadsByThreadKey: Record<string, Record<string, unknown>>;
+    };
+    delete legacy.draftThreadsByThreadKey[otherDraftId]!.envMode;
+    const legacyHydrated = options.merge(legacy, useComposerDraftStore.getInitialState());
+    expect(legacyHydrated.draftThreadsByThreadKey[otherDraftId]?.envMode).toBe("worktree");
   });
 
   it("clears composer data for one environment without touching another", () => {
@@ -3533,5 +3580,38 @@ describe("composerDraftStore attachment references", () => {
     expect(merged.draftsByThreadKey[threadKeyFor(threadId, TEST_ENVIRONMENT_ID)]?.prompt).toBe(
       prompt,
     );
+  });
+});
+
+describe("resolveDraftThreadEnvMode", () => {
+  it("prefers an explicit mode, then keeps container, then follows the worktree path", () => {
+    expect(
+      resolveDraftThreadEnvMode({
+        requested: "local",
+        nextWorktreePath: "/wt",
+        existing: "container",
+      }),
+    ).toBe("local");
+    expect(
+      resolveDraftThreadEnvMode({
+        requested: undefined,
+        nextWorktreePath: "/wt",
+        existing: "container",
+      }),
+    ).toBe("container");
+    expect(
+      resolveDraftThreadEnvMode({
+        requested: undefined,
+        nextWorktreePath: "/wt",
+        existing: "local",
+      }),
+    ).toBe("worktree");
+    expect(
+      resolveDraftThreadEnvMode({
+        requested: undefined,
+        nextWorktreePath: null,
+        existing: undefined,
+      }),
+    ).toBe("local");
   });
 });

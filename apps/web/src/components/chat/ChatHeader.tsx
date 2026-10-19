@@ -27,6 +27,7 @@ import { threadEnvironment } from "../../state/threads";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { ProjectFavicon } from "../ProjectFavicon";
+import { ThreadContainerControl } from "./ThreadContainerControl";
 import {
   WorkspaceBreadcrumb,
   WorkspaceBreadcrumbItem,
@@ -42,6 +43,8 @@ interface ChatHeaderProps {
   activeThreadId: ThreadId;
   activeThreadTitle: string;
   isServerThread: boolean;
+  /** The thread runs in a container; the header then offers its status and actions. */
+  isContainerThread?: boolean;
   activeProject: EnvironmentProject | null;
   parentThreadLink: { threadId: ThreadId; title: string } | null;
   onOpenThread: (threadId: ThreadId) => void;
@@ -70,6 +73,7 @@ export const ChatHeader = memo(function ChatHeader({
   activeThreadId,
   activeThreadTitle,
   isServerThread,
+  isContainerThread = false,
   activeProject,
   parentThreadLink,
   onOpenThread,
@@ -398,6 +402,12 @@ export const ChatHeader = memo(function ChatHeader({
           )}
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
+      {isServerThread && isContainerThread ? (
+        <ThreadContainerControl
+          environmentId={activeThreadEnvironmentId}
+          threadId={activeThreadId}
+        />
+      ) : null}
     </div>
   );
 });

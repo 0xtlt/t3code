@@ -42,6 +42,7 @@ import {
 } from "../logicalProject";
 import { buildPhysicalToLogicalProjectKeyMap } from "../sidebarProjectGrouping";
 import { threadRuntimeCanArchive } from "@t3tools/client-runtime/state/models";
+import { resolveThreadEnvMode } from "../components/BranchToolbar.logic";
 import { useCopyToClipboard } from "./useCopyToClipboard";
 import { useNewThreadHandler } from "./useHandleNewThread";
 import { useClientSettings } from "./useSettings";
@@ -197,7 +198,7 @@ export function useThreadActionMenu(input: {
             handleNewThread(scopeProjectRef(threadRef.environmentId, thread.projectId), {
               branch: thread.branch,
               worktreePath: thread.worktreePath,
-              envMode: thread.worktreePath ? "worktree" : "local",
+              envMode: resolveThreadEnvMode(thread),
               startFromOrigin: false,
             }),
           );

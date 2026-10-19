@@ -231,7 +231,7 @@ import {
   type SidebarListMarker,
   type SidebarSection,
 } from "./Sidebar.logic";
-import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
+import { resolveLocalCheckoutBranchMismatch, resolveThreadEnvMode } from "./BranchToolbar.logic";
 import {
   createSidebarCollisionDetection,
   createSidebarSortingStrategy,
@@ -1714,7 +1714,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   const isWokeStatus = topStatus?.icon === "woke";
 
   const branchMismatch = resolveLocalCheckoutBranchMismatch({
-    effectiveEnvMode: thread.worktreePath === null ? "local" : "worktree",
+    effectiveEnvMode: resolveThreadEnvMode(thread),
     activeWorktreePath: thread.worktreePath,
     activeThreadBranch: thread.branch,
     currentGitBranch: visibleGitStatus?.refName ?? null,
@@ -2551,7 +2551,7 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
     gitStatus.data,
   );
   const branchMismatch = resolveLocalCheckoutBranchMismatch({
-    effectiveEnvMode: thread.worktreePath === null ? "local" : "worktree",
+    effectiveEnvMode: resolveThreadEnvMode(thread),
     activeWorktreePath: thread.worktreePath,
     activeThreadBranch: thread.branch,
     currentGitBranch: visibleGitStatus?.refName ?? null,
@@ -4278,7 +4278,7 @@ export default function Sidebar() {
               handleNewThreadRef.current(scopeProjectRef(thread.environmentId, thread.projectId), {
                 branch: thread.branch,
                 worktreePath: thread.worktreePath,
-                envMode: thread.worktreePath ? "worktree" : "local",
+                envMode: resolveThreadEnvMode(thread),
                 startFromOrigin: false,
               }),
             );

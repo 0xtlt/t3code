@@ -6,6 +6,7 @@ import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environ
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import {
   ChevronDownIcon,
+  ContainerIcon,
   FolderGit2Icon,
   FolderGitIcon,
   FolderIcon,
@@ -25,10 +26,12 @@ import {
 
 import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
+import { useEnvironmentSupportsContainerThreads } from "../state/container";
 import { useProject, useQuietThreadShell, useThreadShellsForProjectRefs } from "../state/entities";
 import {
   type EnvMode,
   type EnvironmentOption,
+  isNewWorktreeEnvMode,
   resolveContextStripLabelsCompact,
   resolveCurrentWorkspaceLabel,
   resolveEnvModeLabel,
@@ -43,6 +46,7 @@ import {
 } from "./BranchToolbarBranchSelector";
 import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSelector";
 import { BranchToolbarEnvModeSelector } from "./BranchToolbarEnvModeSelector";
+import { ContainerMenuRadioItem } from "./ContainerEnvModeItems";
 import { PreviousWorktreeItemContent } from "./PreviousWorktreeItemContent";
 import { ThreadDetailsControl } from "./chat/ThreadDetailsControl";
 import {
@@ -137,6 +141,7 @@ function showWorkspaceContextMenu(event: ReactMouseEvent, workspacePath: string)
 }
 
 interface RunContextSelectorProps {
+  containerEnvironmentId: EnvironmentId | null;
   displayMode?: "toolbar" | "panel";
   workspaceRoot?: string;
   forceNewWorktree: boolean;
@@ -158,6 +163,7 @@ interface RunContextSelectorProps {
 }
 
 const RunContextSelector = memo(function RunContextSelector({
+  containerEnvironmentId,
   displayMode = "toolbar",
   workspaceRoot,
   forceNewWorktree,
@@ -181,22 +187,24 @@ const RunContextSelector = memo(function RunContextSelector({
   const activeEnvironment =
     availableEnvironments?.find((env) => env.environmentId === environmentId) ?? null;
   const WorkspaceIcon =
-    effectiveEnvMode === "worktree"
-      ? FolderGit2Icon
-      : activeWorktreePath
-        ? FolderGitIcon
-        : FolderIcon;
+    effectiveEnvMode === "container"
+      ? ContainerIcon
+      : effectiveEnvMode === "worktree"
+        ? FolderGit2Icon
+        : activeWorktreePath
+          ? FolderGitIcon
+          : FolderIcon;
   const workspaceLabel = forceNewWorktree
     ? resolveEnvModeLabel("worktree")
     : envModeLocked
       ? resolveLockedWorkspaceLabel(activeWorktreePath, effectiveEnvMode)
-      : effectiveEnvMode === "worktree"
-        ? resolveEnvModeLabel("worktree")
+      : effectiveEnvMode !== "local"
+        ? resolveEnvModeLabel(effectiveEnvMode)
         : resolveCurrentWorkspaceLabel(activeWorktreePath);
   const isPanel = displayMode === "panel";
   const isLocked = envLocked || (envModeLocked && (!isPanel || !showEnvironmentPicker));
   const workspacePath =
-    forceNewWorktree || (effectiveEnvMode === "worktree" && !activeWorktreePath)
+    forceNewWorktree || (isNewWorktreeEnvMode(effectiveEnvMode) && !activeWorktreePath)
       ? null
       : (activeWorktreePath ?? workspaceRoot);
   const handleContextMenu = (event: ReactMouseEvent) => {
@@ -386,6 +394,12 @@ const RunContextSelector = memo(function RunContextSelector({
                 <span className="min-w-0 truncate">{resolveEnvModeLabel("worktree")}</span>
               </span>
             </MenuRadioItem>
+            {containerEnvironmentId !== null ? (
+              <ContainerMenuRadioItem
+                environmentId={containerEnvironmentId}
+                disabled={envModeLocked}
+              />
+            ) : null}
             {previousWorktreeLabel ? (
               <MenuRadioItem disabled={envModeLocked} value="previous-worktree" closeOnClick>
                 <PreviousWorktreeItemContent branch={previousWorktreeBranch} />
@@ -600,6 +614,8 @@ export const BranchToolbar = memo(function BranchToolbar({
     ? null
     : (serverThread?.worktreePath ?? draftThread?.worktreePath ?? null);
   const effectiveEnvMode = forceNewWorktree ? "worktree" : envMode;
+  const containerSupported = useEnvironmentSupportsContainerThreads(environmentId);
+  const containerEnvironmentId = containerSupported && !forceNewWorktree ? environmentId : null;
   const envModeLocked = envLocked || (serverThread !== null && activeWorktreePath !== null);
 
   const canUsePreviousWorktree =
@@ -664,6 +680,7 @@ export const BranchToolbar = memo(function BranchToolbar({
       <div className="flex w-full flex-col" data-thread-panel-run-context>
         {panelSection !== "branch" ? (
           <RunContextSelector
+            containerEnvironmentId={containerEnvironmentId}
             displayMode="panel"
             workspaceRoot={activeProject.workspaceRoot}
             forceNewWorktree={forceNewWorktree}
@@ -720,6 +737,7 @@ export const BranchToolbar = memo(function BranchToolbar({
       {showGitControls ? (
         <div className="contents @3xl/composer-surface:hidden">
           <RunContextSelector
+            containerEnvironmentId={containerEnvironmentId}
             forceNewWorktree={forceNewWorktree}
             autoEnvironmentLabel={autoEnvironmentLabel}
             onAutoEnvironment={onAutoEnvironment}
@@ -768,6 +786,7 @@ export const BranchToolbar = memo(function BranchToolbar({
           )}
           {showGitControls ? (
             <BranchToolbarEnvModeSelector
+              containerEnvironmentId={containerEnvironmentId}
               forceNewWorktree={forceNewWorktree}
               envLocked={envModeLocked}
               effectiveEnvMode={effectiveEnvMode}

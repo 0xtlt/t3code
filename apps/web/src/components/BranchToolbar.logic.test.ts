@@ -8,6 +8,8 @@ import {
   resolveCurrentWorkspaceLabel,
   resolveDraftEnvModeAfterBranchChange,
   resolveEffectiveEnvMode,
+  resolveThreadEnvMode,
+  isNewWorktreeEnvMode,
   resolveEnvModeLabel,
   resolveBranchTriggerLabel,
   resolveBranchToolbarPrBranch,
@@ -869,5 +871,45 @@ describe("sanitizeNewRefName", () => {
   it("does not collapse dashes the user typed", () => {
     expect(sanitizeNewRefName("new - branch")).toBe("new---branch");
     expect(sanitizeNewRefName("foo--bar")).toBe("foo--bar");
+  });
+});
+
+describe("container env mode", () => {
+  it("shows an existing container thread as Container whatever its worktree", () => {
+    expect(resolveThreadEnvMode({ worktreePath: "/wt", container: true })).toBe("container");
+    expect(resolveThreadEnvMode({ worktreePath: "/wt" })).toBe("worktree");
+    expect(resolveThreadEnvMode({ worktreePath: null, container: false })).toBe("local");
+  });
+
+  it("keeps a container draft in container mode, even once a worktree path exists", () => {
+    expect(
+      resolveEffectiveEnvMode({
+        activeWorktreePath: null,
+        hasServerThread: false,
+        draftThreadEnvMode: "container",
+      }),
+    ).toBe("container");
+    expect(
+      resolveEffectiveEnvMode({
+        activeWorktreePath: "/wt",
+        hasServerThread: true,
+        draftThreadEnvMode: undefined,
+        threadContainer: true,
+      }),
+    ).toBe("container");
+  });
+
+  it("treats container like worktree where a new worktree is prepared", () => {
+    expect(isNewWorktreeEnvMode("container")).toBe(true);
+    expect(isNewWorktreeEnvMode("worktree")).toBe(true);
+    expect(isNewWorktreeEnvMode("local")).toBe(false);
+    expect(
+      resolveDraftEnvModeAfterBranchChange({
+        nextWorktreePath: null,
+        currentWorktreePath: null,
+        effectiveEnvMode: "container",
+      }),
+    ).toBe("container");
+    expect(resolveLockedWorkspaceLabel("/wt", "container")).toBe("Container");
   });
 });

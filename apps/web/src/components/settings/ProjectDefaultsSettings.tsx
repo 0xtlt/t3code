@@ -28,6 +28,11 @@ import { toastManager } from "../ui/toast";
 import { Switch } from "../ui/switch";
 import type { ProjectSettingsCategory } from "./ProjectSettingsPanel";
 import { searchableSetting } from "./settingsSearch";
+import {
+  resolveWorkspaceDefault,
+  WORKSPACE_DEFAULT_RESET_PATCH,
+  workspaceDefaultPatch,
+} from "./workspaceDefault.logic";
 import { useSettingsScope } from "./SettingsScopeContext";
 import {
   SETTINGS_PICKER_TRIGGER_CLASSNAME,
@@ -79,7 +84,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
   const mixedModel = useScopedSettingsMixed(["defaultModelSelection"]);
   const mixedPermissions = useScopedSettingsMixed(["defaultRuntimeMode"]);
   const PermissionIcon = runtimeModeConfig[settings.defaultRuntimeMode].icon;
-  const mixedWorkspace = useScopedSettingsMixed(["defaultThreadEnvMode"]);
+  const mixedWorkspace = useScopedSettingsMixed(["defaultThreadEnvMode", "defaultThreadContainer"]);
   const mixedSubmodules = useScopedSettingsMixed(["worktreeSubmodules"]);
   const mixedBrowser = useScopedSettingsMixed(["enableAgentBrowserAccess"]);
   const mixedAutoPull = useScopedSettingsMixed(["defaultAutoPull"]);
@@ -201,10 +206,21 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
       }
     />
   );
+  const containerSupported =
+    connectedEnvironments.length > 0 &&
+    connectedEnvironments.every(
+      (environment) => environment.serverConfig?.environment.capabilities.containerThreads === true,
+    );
+  const workspaceDefault = effective ? resolveWorkspaceDefault(effective) : null;
   const workspaceRow = (
     <SettingsRow
       serverScoped
-      settingKeys={["defaultThreadEnvMode"]}
+      // The inheritance popover follows the key that decides the current choice.
+      settingKeys={
+        workspaceDefault === "container"
+          ? ["defaultThreadContainer", "defaultThreadEnvMode"]
+          : ["defaultThreadEnvMode", "defaultThreadContainer"]
+      }
       mixed={mixedWorkspace}
       id={searchableSetting("new-threads").id}
       title="Workspace"
@@ -214,25 +230,30 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
           : "Where new threads start. Projects and their t3.json can override it."
       }
       resetAction={
-        !isProjectScope && settings.defaultThreadEnvMode !== null ? (
+        !isProjectScope &&
+        (settings.defaultThreadEnvMode !== null || settings.defaultThreadContainer !== null) ? (
           <SettingResetButton
             label="default workspace"
-            onClick={() => updateSettings({ defaultThreadEnvMode: null })}
+            onClick={() =>
+              updateSettings(
+                containerSupported ? WORKSPACE_DEFAULT_RESET_PATCH : { defaultThreadEnvMode: null },
+              )
+            }
           />
         ) : null
       }
       control={
         <Select
-          value={mixedWorkspace ? null : (effective?.defaultThreadEnvMode ?? null)}
+          value={mixedWorkspace ? null : workspaceDefault}
           onValueChange={(value) => {
-            if (value === "local" || value === "worktree")
-              updateSettings({ defaultThreadEnvMode: value });
+            if (value === "local" || value === "worktree" || value === "container")
+              updateSettings(workspaceDefaultPatch(value, { containerSupported }));
           }}
         >
           <SelectTrigger size="sm" aria-label="Default workspace">
             <SelectValue>
               {(value: string | null) =>
-                value === "local" || value === "worktree"
+                value === "local" || value === "worktree" || value === "container"
                   ? resolveEnvModeLabel(value)
                   : unavailable
                     ? "Unavailable"
@@ -243,6 +264,11 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
           <SelectPopup align="end" alignItemWithTrigger={false}>
             <SelectItem value="local">{resolveEnvModeLabel("local")}</SelectItem>
             <SelectItem value="worktree">{resolveEnvModeLabel("worktree")}</SelectItem>
+            {containerSupported || workspaceDefault === "container" ? (
+              <SelectItem value="container" disabled={!containerSupported}>
+                {resolveEnvModeLabel("container")}
+              </SelectItem>
+            ) : null}
           </SelectPopup>
         </Select>
       }

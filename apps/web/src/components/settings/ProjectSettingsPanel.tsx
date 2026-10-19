@@ -45,6 +45,7 @@ import {
 } from "./ProjectFaviconPickerDialog";
 import { ProjectActionsSettings } from "./ProjectActionsSettings";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
+import { ProjectSecretsSection } from "./ProjectSecretsSection";
 import { projectGroupTitleNeedsUpdate } from "./ProjectSettingsPanel.logic";
 import { useSettingsProjectGroups } from "./useSettingsProjectGroups";
 import { settingsScopeEnvironmentLabels } from "./settingsScopeAxis";
@@ -309,6 +310,11 @@ function ProjectDetail({
   };
 
   const hasMultipleCheckouts = group.memberProjects.length > 1;
+  const secretMembers = group.memberProjects.filter(
+    (member) =>
+      environmentById.get(member.environmentId)?.serverConfig?.environment.capabilities
+        .projectSecrets === true,
+  );
 
   const removeMembers = async (members: ReadonlyArray<SidebarProjectGroupMember>) => {
     if (checkProjectAccess(members, "Failed to remove project")) return;
@@ -569,6 +575,15 @@ function ProjectDetail({
         </SettingsSection>
         <ProjectDefaultsSettings category="project" />
         <ProjectActionsSettings />
+        {secretMembers.map((member) => (
+          <ProjectSecretsSection
+            key={member.physicalProjectKey}
+            environmentId={member.environmentId}
+            environmentLabel={secretMembers.length > 1 ? (member.environmentLabel ?? null) : null}
+            projectId={member.id}
+            threads={threads}
+          />
+        ))}
         {hasMultipleCheckouts ? checkoutChoices : null}
         <SettingsSection title="Danger">
           <SettingsRow

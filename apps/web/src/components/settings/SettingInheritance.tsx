@@ -49,9 +49,14 @@ function formatValue(key: keyof ServerSettings, value: unknown): string {
             ? "Text generation model"
             : key === "reviewGuideModelSelection"
               ? "Source control writer model"
-              : key === "defaultThreadEnvMode" || key === "worktreeSubmodules"
+              : key === "defaultThreadEnvMode" ||
+                  key === "defaultThreadContainer" ||
+                  key === "worktreeSubmodules"
                 ? "Inherit"
                 : "Not set";
+  }
+  if (key === "defaultThreadContainer" && typeof value === "boolean") {
+    return value ? resolveEnvModeLabel("container") : "Not a container";
   }
   if (typeof value === "boolean") return value ? "On" : "Off";
   if (typeof value === "number") {

@@ -201,8 +201,28 @@ describe("searchSettings", () => {
       "auto-settle-inactive-threads",
       "auto-settle-merged-threads",
       "days-before-auto-settle",
+      "containers",
+      "project-secrets",
     ]);
     expect(available.map((item) => item.id).filter((id) => gatedIds.has(id))).toEqual([]);
+  });
+
+  it("offers container settings only when an environment advertises the capability", () => {
+    const base = {
+      hasCloudPublicConfig: false,
+      hasEnvironment: true,
+      hasProviderSettingsEnvironment: true,
+      hasMacProviderSettingsEnvironment: false,
+      canManageLocalBackend: false,
+      isWslSettingsRowVisible: false,
+      hasThreadAutoSettlement: false,
+    };
+    const ids = (extra: { hasContainerThreads?: boolean; hasProjectSecrets?: boolean }) =>
+      filterAvailableSettingsSearchItems({ ...base, ...extra }).map((item) => item.id);
+    expect(ids({})).not.toContain("containers");
+    expect(ids({ hasContainerThreads: true })).toContain("containers");
+    expect(ids({ hasContainerThreads: true })).not.toContain("project-secrets");
+    expect(ids({ hasProjectSecrets: true })).toContain("project-secrets");
   });
 
   it("offers Cursor Keychain settings only when a macOS provider environment is available", () => {

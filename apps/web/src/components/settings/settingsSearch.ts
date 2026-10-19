@@ -57,6 +57,8 @@ export interface SettingsSearchItem {
   readonly managedTunnelOnly?: boolean;
   readonly secondary?: boolean;
   readonly requiresThreadAutoSettlement?: boolean;
+  readonly requiresContainerThreads?: boolean;
+  readonly requiresProjectSecrets?: boolean;
 }
 
 export interface SettingsSearchAvailability {
@@ -68,6 +70,8 @@ export interface SettingsSearchAvailability {
   readonly canManageLocalBackend: boolean;
   readonly isWslSettingsRowVisible: boolean;
   readonly hasThreadAutoSettlement: boolean;
+  readonly hasContainerThreads?: boolean;
+  readonly hasProjectSecrets?: boolean;
   readonly managedTunnelActive?: boolean;
 }
 
@@ -450,6 +454,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [
       "balanced performance battery saver advanced git fetch provider health refresh host power monitor idle policy",
     ],
+  },
+  {
+    id: "containers",
+    title: "Containers",
+    to: "/settings/general",
+    scope: "environment-defaults",
+    requiresContainerThreads: true,
+    searchTerms: ["docker podman engine cpu memory limits forward env sandbox container threads"],
   },
   {
     id: "new-threads",
@@ -875,6 +887,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["commands scripts setup run dev server checkout worktree t3.json import"],
   },
   {
+    id: "project-secrets",
+    title: "Secrets",
+    to: "/settings/projects",
+    requiresProjectSecrets: true,
+    searchTerms: ["container api key token env environment variable file write-only encrypted"],
+  },
+  {
     id: "environment-icon",
     title: "Environment icon",
     to: "/settings/connections",
@@ -1113,6 +1132,8 @@ export function filterAvailableSettingsSearchItems(
       (!item.localEnvironmentOnly || !availability.localEnvironmentDisabled) &&
       (!item.wslAvailableOnly || availability.isWslSettingsRowVisible) &&
       (!item.requiresThreadAutoSettlement || availability.hasThreadAutoSettlement) &&
+      (!item.requiresContainerThreads || availability.hasContainerThreads === true) &&
+      (!item.requiresProjectSecrets || availability.hasProjectSecrets === true) &&
       (!item.managedTunnelOnly || availability.managedTunnelActive === true),
   );
 }

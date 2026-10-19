@@ -809,7 +809,7 @@ export function resolveBackgroundDraftWorkspaceOptions(input: {
     envMode: input.envMode,
     branch: input.branch,
     worktreePath: null,
-    startFromOrigin: input.envMode === "worktree" && input.startFromOrigin,
+    startFromOrigin: input.envMode !== "local" && input.startFromOrigin,
   };
 }
 
