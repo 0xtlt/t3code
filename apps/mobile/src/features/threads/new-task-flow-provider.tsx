@@ -121,6 +121,13 @@ import {
 } from "./new-task-context-presentation";
 import { resolveEnvironmentProjectMatch } from "./new-task-project-selection";
 import { resolveProjectThreadCreationBranch } from "./projectThreadCreationValidation";
+import {
+  type WorkspaceChoice,
+  resolveContainerFlag,
+  resolveDefaultWorkspaceChoice,
+  workspaceChoiceFor,
+  workspaceSelectionForChoice,
+} from "./workspace-choice";
 
 type WorkspaceMode = "local" | "worktree";
 
@@ -168,6 +175,9 @@ type NewTaskFlowContextValue = {
   readonly selectedProjectKey: string | null;
   readonly selectedModelKey: string | null;
   readonly workspaceMode: WorkspaceMode;
+  /** Container threads are always a new worktree, so `workspaceMode` is "worktree" for them. */
+  readonly workspaceChoice: WorkspaceChoice;
+  readonly containerAvailable: boolean;
   readonly canChooseWorkspace: boolean;
   readonly selectedBranchName: string | null;
   readonly selectedWorktreePath: string | null;
@@ -216,7 +226,7 @@ type NewTaskFlowContextValue = {
     key: string | null,
     options?: ReadonlyArray<ProviderOptionSelection>,
   ) => void;
-  readonly setWorkspaceMode: (mode: WorkspaceMode) => void;
+  readonly setWorkspaceChoice: (choice: WorkspaceChoice) => void;
   readonly selectBranch: (branch: VcsRef) => void;
   readonly setStartFromOrigin: (value: boolean) => void;
   readonly beginEditingPendingTask: (messageId: string) => boolean;
@@ -503,25 +513,45 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         thread.environmentId === selectedProject.environmentId &&
         thread.projectId === selectedProject.id,
     );
-  const defaultWorkspaceMode: WorkspaceMode = canChooseWorkspace
-    ? resolveNewThreadEnvMode({
-        projectSettings,
-        workspaceRoot: selectedProject?.workspaceRoot ?? null,
-        newProjectsRoot: selectedEnvironmentServerConfig?.newProjectsRoot,
-        projectHasThreads: selectedProjectHasThreads,
+  // A pull request attaches an existing worktree, which a container cannot reuse.
+  const containerAvailable =
+    canChooseWorkspace &&
+    selectedEnvironmentServerConfig?.environment.capabilities.containerThreads === true &&
+    selectedProjectDraft.workspaceSelection?.pullRequestReference === undefined;
+  const defaultWorkspaceChoice: WorkspaceChoice = canChooseWorkspace
+    ? resolveDefaultWorkspaceChoice({
+        envMode: resolveNewThreadEnvMode({
+          projectSettings,
+          workspaceRoot: selectedProject?.workspaceRoot ?? null,
+          newProjectsRoot: selectedEnvironmentServerConfig?.newProjectsRoot,
+          projectHasThreads: selectedProjectHasThreads,
+        }),
+        defaultContainer: projectSettings.settings.defaultThreadContainer,
+        containerAvailable,
       })
     : "local";
+  const defaultWorkspaceMode: WorkspaceMode =
+    workspaceSelectionForChoice(defaultWorkspaceChoice).mode;
   // While the file read is pending and nothing above it decided, the
   // resolved default is provisional. Nothing may write it into the draft
   // during that window (the auto-branch effect does), or the frozen interim
   // value beats the t3.json default once it loads.
   const defaultWorkspaceModeSettled =
     selectedProjectDraft.workspaceSelection?.mode !== undefined ||
-    projectSettings.sources.defaultThreadEnvMode !== "environment" ||
+    (projectSettings.sources.defaultThreadEnvMode !== "environment" &&
+      projectSettings.sources.defaultThreadContainer !== "environment") ||
     (!t3ProjectFileQuery.isPending && !fileAccessPending);
   const workspaceMode = canChooseWorkspace
     ? (selectedProjectDraft.workspaceSelection?.mode ?? defaultWorkspaceMode)
     : "local";
+  const container =
+    workspaceMode === "worktree" &&
+    resolveContainerFlag({
+      draftSelection: selectedProjectDraft.workspaceSelection,
+      defaultChoice: defaultWorkspaceChoice,
+      containerAvailable,
+    });
+  const workspaceChoice = workspaceChoiceFor(workspaceMode, container);
   const selectedBranchName = selectedProjectDraft.workspaceSelection?.branch ?? null;
   const selectedWorktreePath = selectedProjectDraft.workspaceSelection?.worktreePath ?? null;
   // Keep the user's explicit choice separate from the resolved display value:
@@ -843,8 +873,9 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     [isScratchDraft, openScratch, selectEnvironment, selectedEnvironmentId, setProject],
   );
 
-  const setWorkspaceMode = useCallback(
-    (mode: WorkspaceMode) => {
+  const setWorkspaceChoice = useCallback(
+    (choice: WorkspaceChoice) => {
+      const { mode, container: nextContainer } = workspaceSelectionForChoice(choice);
       if (!selectedProjectDraftKey) {
         return;
       }
@@ -866,6 +897,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
           branch: mode === "local" ? localSelection.branch : selectedBranchName,
           worktreePath: mode === "local" ? localSelection.worktreePath : selectedWorktreePath,
           ...(draftStartFromOrigin !== undefined ? { startFromOrigin: draftStartFromOrigin } : {}),
+          ...(nextContainer ? { container: true } : {}),
         },
       });
     },
@@ -929,10 +961,11 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
             branchWorktreePath: branch.worktreePath,
           }),
           ...(draftStartFromOrigin !== undefined ? { startFromOrigin: draftStartFromOrigin } : {}),
+          ...(container ? { container: true } : {}),
         },
       });
     },
-    [draftStartFromOrigin, selectedProject, selectedProjectDraftKey, workspaceMode],
+    [container, draftStartFromOrigin, selectedProject, selectedProjectDraftKey, workspaceMode],
   );
 
   const setStartFromOrigin = useCallback(
@@ -946,10 +979,11 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
           branch: selectedBranchName,
           worktreePath: selectedWorktreePath,
           startFromOrigin: value,
+          ...(container ? { container: true } : {}),
         },
       });
     },
-    [selectedBranchName, selectedProjectDraftKey, selectedWorktreePath, workspaceMode],
+    [container, selectedBranchName, selectedProjectDraftKey, selectedWorktreePath, workspaceMode],
   );
 
   const refreshBranches = branchState.refresh;
@@ -1035,6 +1069,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
           branch: message.creation.branch,
           worktreePath: message.creation.worktreePath,
           startFromOrigin: message.creation.startFromOrigin ?? false,
+          ...(message.creation.container ? { container: true } : {}),
           pullRequestReference: message.creation.pullRequestReference,
         },
       });
@@ -1121,13 +1156,23 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
           ...((workspaceSelection?.startFromOrigin ?? startFromOrigin)
             ? { startFromOrigin: true }
             : {}),
+          ...(mode === "worktree" &&
+          resolveContainerFlag({
+            draftSelection: workspaceSelection,
+            defaultChoice: defaultWorkspaceChoice,
+            containerAvailable,
+          })
+            ? { container: true }
+            : {}),
         },
         createdAt: metadata.createdAt,
       };
     },
     [
       canChooseWorkspace,
+      containerAvailable,
       defaultRuntimeMode,
+      defaultWorkspaceChoice,
       editingPendingProject,
       editingPendingTask,
       selectedEnvironmentServerConfig,
@@ -1244,6 +1289,8 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       selectedProjectKey,
       selectedModelKey,
       workspaceMode,
+      workspaceChoice,
+      containerAvailable,
       canChooseWorkspace,
       selectedBranchName,
       selectedWorktreePath,
@@ -1281,7 +1328,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       switchEnvironment,
       switchingToEnvironmentId,
       setSelectedModelKey,
-      setWorkspaceMode,
+      setWorkspaceChoice,
       selectBranch,
       setStartFromOrigin,
       beginEditingPendingTask,
@@ -1354,10 +1401,12 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       setRuntimeMode,
       setSelectedModelKey,
       setStartFromOrigin,
-      setWorkspaceMode,
+      setWorkspaceChoice,
       startFromOrigin,
       submitting,
       workspaceMode,
+      workspaceChoice,
+      containerAvailable,
       canChooseWorkspace,
       appendAttachments,
       clearAttachments,

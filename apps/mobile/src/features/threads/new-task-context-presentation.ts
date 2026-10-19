@@ -6,8 +6,12 @@ type WorkspaceMode = "local" | "worktree";
 export function resolveNewTaskWorkspaceLabel(input: {
   readonly workspaceMode: WorkspaceMode;
   readonly worktreePath: string | null;
-}): "Current checkout" | "Current worktree" | "New worktree" {
+  readonly container?: boolean;
+}): "Current checkout" | "Current worktree" | "New worktree" | "New container" {
   if (input.workspaceMode === "worktree") {
+    if (input.container) {
+      return "New container";
+    }
     return "New worktree";
   }
   return input.worktreePath ? "Current worktree" : "Current checkout";

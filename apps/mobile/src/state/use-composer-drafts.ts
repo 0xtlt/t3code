@@ -351,6 +351,8 @@ export interface ComposerDraftWorkspaceSelection {
   readonly branch: string | null;
   readonly worktreePath: string | null;
   readonly startFromOrigin?: boolean;
+  /** Only ever with `mode: "worktree"`. Absent in drafts saved before container threads. */
+  readonly container?: boolean;
   readonly pullRequestReference?: string;
 }
 
@@ -364,6 +366,7 @@ const ComposerDraftWorkspaceSelectionSchema = Schema.Struct({
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   startFromOrigin: Schema.optional(Schema.Boolean),
+  container: Schema.optional(Schema.Boolean),
   pullRequestReference: Schema.optional(Schema.String),
 });
 
@@ -1149,7 +1152,9 @@ export async function removeDeliveredCloudQueuedMessage(
             editor.workspaceSelection.pullRequestReference !==
               message.creation?.pullRequestReference ||
             (editor.workspaceSelection.startFromOrigin ?? false) !==
-              (message.creation?.startFromOrigin ?? false))))
+              (message.creation?.startFromOrigin ?? false) ||
+            (editor.workspaceSelection.container ?? false) !==
+              (message.creation?.container ?? false))))
     )
       continue;
     const drafts = { ...saved.drafts };

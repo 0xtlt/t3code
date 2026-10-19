@@ -31,6 +31,8 @@ export interface ProjectThreadStartTurnSpec {
   readonly branch: string | null;
   readonly worktreePath: string | null;
   readonly startFromOrigin: boolean;
+  /** Needs a new worktree; ignored for a local workspace. */
+  readonly container?: boolean;
   readonly worktreeBranchName: string;
 }
 
@@ -72,6 +74,7 @@ export function buildProjectThreadStartTurnInput(spec: ProjectThreadStartTurnSpe
               ...(spec.startFromOrigin ? { startFromOrigin: true } : {}),
             },
             runSetupScript: true,
+            ...(spec.container ? { container: true } : {}),
           }
         : {}),
     },

@@ -140,6 +140,22 @@ describe("thread outbox", () => {
       decodeQueuedThreadMessage(JSON.parse(JSON.stringify(encodeQueuedThreadMessage(message)))),
     ).toEqual(message);
   });
+  it("decodes queued tasks saved before container threads and keeps the container flag", () => {
+    const creation = {
+      projectId: ProjectId.make("project-1"),
+      workspaceMode: "worktree" as const,
+      branch: "main",
+      worktreePath: null,
+    };
+    const base = queuedMessage({ messageId: "creation", createdAt: "2026-10-01T09:00:00.000Z" });
+    const roundTrip = (message: QueuedThreadMessage) =>
+      decodeQueuedThreadMessage(JSON.parse(JSON.stringify(encodeQueuedThreadMessage(message))));
+    expect(roundTrip({ ...base, creation }).creation?.container).toBeUndefined();
+    expect(roundTrip({ ...base, creation: { ...creation, container: true } }).creation).toEqual({
+      ...creation,
+      container: true,
+    });
+  });
   it("retains queue mode when a queued provider switch reloads from storage", () => {
     const message: QueuedThreadMessage = {
       ...queuedMessage({ messageId: "queued-switch", createdAt: "2026-09-17T09:00:00.000Z" }),

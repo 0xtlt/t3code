@@ -135,3 +135,54 @@ describe("new thread on an existing branch", () => {
     },
   );
 });
+
+describe("container thread bootstrap", () => {
+  const baseSpec = {
+    projectId: ProjectId.make("project"),
+    projectCwd: "/workspace",
+    threadId: "new-thread",
+    commandId: "command",
+    messageId: "message",
+    createdAt: "2026-10-01T00:00:00Z",
+    text: "Run isolated",
+    uploadedAttachments: [],
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6-sol" },
+    runtimeMode: "full-access" as const,
+    interactionMode: "default" as const,
+    branch: "main",
+    worktreePath: null,
+    startFromOrigin: false,
+    worktreeBranchName: "t3code/abc",
+  };
+
+  it("asks for a container together with a new worktree", () => {
+    const { bootstrap } = buildProjectThreadStartTurnInput({
+      ...baseSpec,
+      workspaceMode: "worktree",
+      container: true,
+    });
+    expect(bootstrap).toMatchObject({
+      prepareWorktree: { projectCwd: "/workspace", baseBranch: "main", branch: "t3code/abc" },
+      runSetupScript: true,
+      container: true,
+    });
+  });
+
+  it("omits the flag for a plain worktree", () => {
+    const { bootstrap } = buildProjectThreadStartTurnInput({
+      ...baseSpec,
+      workspaceMode: "worktree",
+    });
+    expect(bootstrap).not.toHaveProperty("container");
+  });
+
+  it("never sends a container for a local workspace", () => {
+    const { bootstrap } = buildProjectThreadStartTurnInput({
+      ...baseSpec,
+      workspaceMode: "local",
+      container: true,
+    });
+    expect(bootstrap).not.toHaveProperty("container");
+    expect(bootstrap).not.toHaveProperty("prepareWorktree");
+  });
+});

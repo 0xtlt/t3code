@@ -26,9 +26,22 @@ export class ProjectThreadBaseBranchRequiredError extends Schema.TaggedError<Pro
   }
 }
 
+export class ProjectThreadContainerNeedsWorktreeError extends Schema.TaggedError<ProjectThreadContainerNeedsWorktreeError>()(
+  "ProjectThreadContainerNeedsWorktreeError",
+  {
+    environmentId: EnvironmentId,
+    projectId: ProjectId,
+  },
+) {
+  override get message(): string {
+    return "A container thread needs its own worktree.";
+  }
+}
+
 export const ProjectThreadCreationValidationError = Schema.Union([
   ProjectThreadTaskRequiredError,
   ProjectThreadBaseBranchRequiredError,
+  ProjectThreadContainerNeedsWorktreeError,
 ]);
 export type ProjectThreadCreationValidationError = typeof ProjectThreadCreationValidationError.Type;
 
@@ -47,6 +60,7 @@ export function validateProjectThreadCreation(input: {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;
   readonly environmentMode: "local" | "worktree";
+  readonly container?: boolean;
   readonly branch: string | null;
   readonly initialMessageText: string;
 }): ProjectThreadCreationValidationError | null {
@@ -55,6 +69,12 @@ export function validateProjectThreadCreation(input: {
       environmentId: input.environmentId,
       projectId: input.projectId,
       environmentMode: input.environmentMode,
+    });
+  }
+  if (input.container === true && input.environmentMode !== "worktree") {
+    return new ProjectThreadContainerNeedsWorktreeError({
+      environmentId: input.environmentId,
+      projectId: input.projectId,
     });
   }
   if (input.environmentMode === "worktree" && !input.branch) {

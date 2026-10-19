@@ -41,6 +41,8 @@ const QueuedThreadCreationSchema = Schema.Struct({
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   startFromOrigin: Schema.optional(Schema.Boolean),
+  // Additive: queued messages written before container threads decode without it.
+  container: Schema.optional(Schema.Boolean),
   pullRequestReference: Schema.optional(Schema.String),
 });
 
@@ -72,6 +74,7 @@ export interface QueuedThreadCreation {
   readonly branch: string | null;
   readonly worktreePath: string | null;
   readonly startFromOrigin?: boolean;
+  readonly container?: boolean;
   readonly pullRequestReference?: string;
 }
 

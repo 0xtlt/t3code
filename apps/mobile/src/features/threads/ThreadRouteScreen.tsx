@@ -89,6 +89,7 @@ import {
 import { threadRouteIsHydrating } from "./thread-route-hydration";
 import { useThreadPromptLink } from "../prompt-links/useThreadPromptLink";
 import { ThreadHeader } from "./ThreadHeader";
+import { buildThreadHeaderSubtitle } from "./thread-header-subtitle";
 import {
   useAndroidWorkspaceBack,
   useWorkspaceListNavigation,
@@ -429,12 +430,11 @@ function ThreadRouteContent(
   );
 
   const usesNativeHeaderGlass = NATIVE_LIQUID_GLASS_SUPPORTED;
-  const headerSubtitle = [
-    selectedThreadProject?.title ?? null,
-    selectedEnvironmentConnection?.environmentLabel ?? null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const headerSubtitle = buildThreadHeaderSubtitle({
+    projectTitle: selectedThreadProject?.title,
+    environmentLabel: selectedEnvironmentConnection?.environmentLabel,
+    container: selectedThread?.container,
+  });
   const gitStatus = useEnvironmentQuery(
     selectedThread !== null && selectedThreadCwd !== null
       ? vcsEnvironment.status({

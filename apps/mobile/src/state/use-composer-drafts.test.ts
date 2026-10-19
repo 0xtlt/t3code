@@ -256,6 +256,20 @@ describe("mobile composer drafts", () => {
       decodePersistedComposerState({ schemaVersion: 1, drafts: { task: draft } }).drafts.task,
     ).toEqual(draft);
   });
+  it("keeps decoding drafts saved before container threads and restores a container choice", () => {
+    const saved = {
+      text: "Run isolated",
+      attachments: [],
+      workspaceSelection: { mode: "worktree", branch: "main", worktreePath: null },
+    };
+    const decodeSelection = (workspaceSelection: object) =>
+      decodePersistedComposerState({
+        schemaVersion: 1,
+        drafts: { task: { ...saved, workspaceSelection } },
+      }).drafts.task?.workspaceSelection;
+    expect(decodeSelection(saved.workspaceSelection)?.container).toBeUndefined();
+    expect(decodeSelection({ ...saved.workspaceSelection, container: true })?.container).toBe(true);
+  });
   it.each([false, true])(
     "restores visible file chips from legacy drafts (archived: %s)",
     async (archived) => {

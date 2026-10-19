@@ -5,6 +5,7 @@ import {
   resolveNewTaskBranchWorktreePath,
   resolveNewTaskBranchLabel,
   resolveNewTaskLocalWorkspaceSelection,
+  resolveNewTaskWorkspaceLabel,
 } from "./new-task-context-presentation";
 
 describe("resolveNewTaskLocalWorkspaceSelection", () => {
@@ -158,5 +159,26 @@ describe("filterNewTaskBranches", () => {
 
   it("matches a typed space against the dash a branch name uses", () => {
     expect(search("  login page ")).toEqual(["Feature/Login-Page"]);
+  });
+});
+
+describe("resolveNewTaskWorkspaceLabel", () => {
+  it("names a container task's workspace", () => {
+    expect(
+      resolveNewTaskWorkspaceLabel({
+        workspaceMode: "worktree",
+        worktreePath: null,
+        container: true,
+      }),
+    ).toBe("New container");
+  });
+
+  it("keeps the existing labels otherwise", () => {
+    expect(resolveNewTaskWorkspaceLabel({ workspaceMode: "worktree", worktreePath: null })).toBe(
+      "New worktree",
+    );
+    expect(resolveNewTaskWorkspaceLabel({ workspaceMode: "local", worktreePath: null })).toBe(
+      "Current checkout",
+    );
   });
 });

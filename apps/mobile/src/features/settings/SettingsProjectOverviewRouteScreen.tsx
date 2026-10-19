@@ -7,8 +7,12 @@ import { useState } from "react";
 import { Platform, Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { AuthSettingsWriteScope } from "@t3tools/contracts";
+
 import { projectEnvironment } from "../../state/projects";
+import { useEnvironmentsWithScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { ProjectSecretsSection } from "./components/ProjectSecretsSection";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsSection } from "./components/SettingsSection";
 import {
@@ -62,6 +66,7 @@ function ProjectOverviewContent(props: {
 }) {
   const representative = props.members[0]!;
   const displayName = deriveProjectGroupLabel({ representative, members: props.members });
+  const writableEnvironments = useEnvironmentsWithScope(props.environments, AuthSettingsWriteScope);
   const [draftName, setDraftName] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const updateProject = useAtomCommand(projectEnvironment.update, {
@@ -170,6 +175,22 @@ function ProjectOverviewContent(props: {
           );
         })}
       </SettingsSection>
+
+      {props.members.map((member) => {
+        const environment = props.environments.find(
+          (entry) => entry.environmentId === member.environmentId,
+        );
+        if (environment?.serverConfig.environment.capabilities.projectSecrets !== true) return null;
+        return (
+          <ProjectSecretsSection
+            key={`${member.environmentId}:${member.id}`}
+            environmentId={member.environmentId}
+            environmentLabel={props.members.length > 1 ? (environment.label ?? null) : null}
+            projectId={member.id}
+            canWrite={writableEnvironments.has(member.environmentId)}
+          />
+        );
+      })}
     </>
   );
 }

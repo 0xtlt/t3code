@@ -8,7 +8,6 @@ import {
   type ResponseStreamingMode,
   type ServerSettings,
   type ServerSettingsPatch,
-  type ThreadEnvMode,
   type WorktreeSubmodules,
   PROJECT_SCOPED_SERVER_SETTING_KEYS,
   type ProjectScopedServerSettingKey,
@@ -18,6 +17,11 @@ import { View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { RUNTIME_MODE_CHOICES } from "../threads/thread-settings-options";
+import {
+  type WorkspaceDefaultChoice,
+  settingsPatchForWorkspaceDefault,
+  workspaceDefaultFromSettings,
+} from "../threads/workspace-choice";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { SettingsScreen } from "./components/SettingsScreen";
@@ -51,7 +55,12 @@ const PAGE_TITLES: Record<SettingsPage, string> = {
 };
 
 const PAGE_PROJECT_KEYS: Record<SettingsPage, readonly ProjectScopedServerSettingKey[]> = {
-  "new-threads": ["defaultThreadEnvMode", "worktreeSubmodules", "defaultRuntimeMode"],
+  "new-threads": [
+    "defaultThreadEnvMode",
+    "defaultThreadContainer",
+    "worktreeSubmodules",
+    "defaultRuntimeMode",
+  ],
   "source-control": [
     "defaultAutoPull",
     "removeAgentCreditsOnMerge",
@@ -84,12 +93,12 @@ const SUBMODULE_CHOICES: ReadonlyArray<{
 ];
 
 const WORKSPACE_CHOICES: ReadonlyArray<{
-  readonly mode: ThreadEnvMode | null;
+  readonly mode: WorkspaceDefaultChoice;
   readonly label: string;
   readonly description: string;
 }> = [
   {
-    mode: null,
+    mode: "inherit",
     label: "Inherit",
     description: "Use the repository's t3.json, or the current checkout.",
   },
@@ -102,6 +111,11 @@ const WORKSPACE_CHOICES: ReadonlyArray<{
     mode: "worktree",
     label: "New worktree",
     description: "Give each new thread a separate checkout.",
+  },
+  {
+    mode: "container",
+    label: "New container",
+    description: "Run each new thread in its own container, in a new worktree.",
   },
 ];
 
@@ -166,6 +180,15 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
   const isMixed = (key: keyof ServerSettings) =>
     reference === null ||
     displayTargets.some((entry) => entry.settings[key] !== reference.settings[key]);
+  const workspaceDefaultMixed =
+    isMixed("defaultThreadEnvMode") || isMixed("defaultThreadContainer");
+  const workspaceDefault =
+    reference === null
+      ? null
+      : workspaceDefaultFromSettings({
+          defaultThreadEnvMode: reference.settings.defaultThreadEnvMode,
+          defaultThreadContainer: reference.settings.defaultThreadContainer,
+        });
   const updateSettings = useAtomCommand(serverEnvironment.updateSettings, {
     label: "environment settings update",
     reportFailure: true,
@@ -226,6 +249,9 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
     pendingWrites > 0 ||
     !hasConnectedSelection ||
     (projectSelected && !supportsProjectOverrides);
+  const supportsContainers = targets.every(
+    (target) => target.environment.serverConfig.environment.capabilities.containerThreads === true,
+  );
   const supportsContinuation = targets.every(
     (target) =>
       target.environment.serverConfig.environment.capabilities.threadRestartContinuation === true,
@@ -276,25 +302,27 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                   <SettingsSection
                     title="Default workspace"
                     trailing={
-                      pendingWrites === 0 && isMixed("defaultThreadEnvMode") ? (
+                      pendingWrites === 0 && workspaceDefaultMixed ? (
                         <MixedValuesLabel projectSelected={projectSelected} />
                       ) : null
                     }
                   >
                     {WORKSPACE_CHOICES.filter(
-                      (choice) => choice.mode !== null || !projectSelected,
+                      (choice) =>
+                        (choice.mode !== "inherit" || !projectSelected) &&
+                        (choice.mode !== "container" || supportsContainers),
                     ).map((choice, index) => (
                       <SettingsChoiceRow
-                        key={choice.mode ?? "inherit"}
+                        key={choice.mode}
                         label={choice.label}
                         description={choice.description}
-                        selected={
-                          !isMixed("defaultThreadEnvMode") &&
-                          uniform("defaultThreadEnvMode") === choice.mode
-                        }
+                        selected={!workspaceDefaultMixed && workspaceDefault === choice.mode}
                         separated={index > 0}
-                        disabled={disabledFor("defaultThreadEnvMode")}
-                        onPress={() => write({ defaultThreadEnvMode: choice.mode })}
+                        disabled={
+                          disabledFor("defaultThreadEnvMode") ||
+                          disabledFor("defaultThreadContainer")
+                        }
+                        onPress={() => write(settingsPatchForWorkspaceDefault(choice.mode))}
                       />
                     ))}
                   </SettingsSection>

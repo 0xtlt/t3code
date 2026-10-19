@@ -132,6 +132,7 @@ import {
   resolveNewTaskBranchLabel,
   resolveNewTaskWorkspaceLabel,
 } from "./new-task-context-presentation";
+import { nextWorkspaceChoice, workspaceChoiceLabel } from "./workspace-choice";
 import { useIncomingShare } from "../sharing/IncomingShareProvider";
 import { selectIncomingShareAttachmentsForServer } from "../sharing/incoming-share-model";
 import { appAtomRegistry } from "../../state/atom-registry";
@@ -141,9 +142,21 @@ import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 
 function NewTaskWorkspaceIcon(props: {
   readonly workspaceMode: "local" | "worktree";
+  readonly container: boolean;
   readonly worktreePath: string | null;
   readonly size: number;
 }) {
+  if (props.container) {
+    return (
+      <SymbolView
+        name="cube"
+        size={props.size}
+        tintColorClassName="accent-icon-muted"
+        type="monochrome"
+      />
+    );
+  }
+
   if (props.workspaceMode === "local" && props.worktreePath === null) {
     return (
       <SymbolView
@@ -1004,6 +1017,7 @@ export function NewTaskDraftScreen(props: {
   const workspaceLabel = resolveNewTaskWorkspaceLabel({
     workspaceMode: flow.workspaceMode,
     worktreePath: flow.selectedWorktreePath,
+    container: flow.workspaceChoice === "container",
   });
   const showBranchLoading = flow.branchesLoading && flow.availableBranches.length === 0;
 
@@ -1553,19 +1567,24 @@ export function NewTaskDraftScreen(props: {
   const workspaceControls = (
     <View className="flex-row items-center gap-1 px-2">
       <ComposerInlineControl
-        accessibilityHint={`Switches to ${flow.workspaceMode === "local" ? "a new worktree" : "the current checkout"}`}
+        accessibilityHint={`Switches to ${workspaceChoiceLabel(nextWorkspaceChoice(flow.workspaceChoice, flow.containerAvailable))}`}
         accessibilityLabel={workspaceLabel}
         disabled={isComposerInteractionLocked || voiceInput.isBusy}
         renderIcon={(size) => (
           <NewTaskWorkspaceIcon
             workspaceMode={flow.workspaceMode}
+            container={flow.workspaceChoice === "container"}
             worktreePath={flow.selectedWorktreePath}
             size={size}
           />
         )}
         label={workspaceLabel}
         maxWidth={flow.workspaceMode === "local" ? 220 : 148}
-        onPress={() => flow.setWorkspaceMode(flow.workspaceMode === "local" ? "worktree" : "local")}
+        onPress={() =>
+          flow.setWorkspaceChoice(
+            nextWorkspaceChoice(flow.workspaceChoice, flow.containerAvailable),
+          )
+        }
         showChevron={false}
       />
 
