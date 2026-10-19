@@ -16,6 +16,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 const PreferenceFields = {
   defaultThreadEnvMode: ServerSettings.fields.defaultThreadEnvMode,
+  defaultThreadContainer: ServerSettings.fields.defaultThreadContainer,
   newWorktreesStartFromOrigin: ServerSettings.fields.newWorktreesStartFromOrigin,
   enableProviderUpdateChecks: ServerSettings.fields.enableProviderUpdateChecks,
   backgroundActivity: Schema.Struct({ profile: BackgroundActivityProfileSelection }),
@@ -57,6 +58,7 @@ const EnvironmentPreferencesTool = Tool.make("t3_environment_preferences_update"
     "Update selected environment-wide preferences through normal settings persistence and notifications. Requires a live full-access/default calling thread. Omitted fields are preserved; empty customInstructions clears them.",
   parameters: Schema.Struct({
     defaultThreadEnvMode: ServerSettingsPatch.fields.defaultThreadEnvMode,
+    defaultThreadContainer: ServerSettingsPatch.fields.defaultThreadContainer,
     newWorktreesStartFromOrigin: ServerSettingsPatch.fields.newWorktreesStartFromOrigin,
     enableProviderUpdateChecks: ServerSettingsPatch.fields.enableProviderUpdateChecks,
     backgroundActivity: Schema.optionalKey(Schema.Struct({ profile: BackgroundActivityProfile })),

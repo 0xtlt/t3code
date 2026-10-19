@@ -4,8 +4,10 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  SecretRef,
   type OrchestrationV2ThreadShell,
   type Project as ProjectRecord,
+  type ProjectSecretSetInput,
 } from "@t3tools/contracts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -22,6 +24,8 @@ import * as ServerConfig from "../../../config.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import * as Project from "../../../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
+import * as ProjectSecrets from "../../../secrets/ProjectSecrets.ts";
+import * as SecretRequests from "../../../secrets/SecretRequests.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as VcsProcess from "../../../vcs/VcsProcess.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -502,5 +506,86 @@ it.effect("a launch into a new worktree creates nothing when its base ref has no
 
     expect((yield* launchFrom("main")).at(-1)?.result).toMatchObject({ projectId });
     expect(launched).toHaveLength(1);
+  }),
+);
+
+it.effect("stores a project secret from a request_secret ref without echoing the value", () =>
+  Effect.gen(function* () {
+    const sourceThreadId = ThreadId.make("source-thread");
+    const projectId = ProjectId.make("project");
+    const providerInstanceId = ProviderInstanceId.make("codex");
+    const caller = {
+      id: sourceThreadId,
+      projectId,
+      providerInstanceId,
+      modelSelection: { instanceId: providerInstanceId, model: "gpt-5" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      activeRunId: "active-run",
+      archivedAt: null,
+      deletedAt: null,
+    } as OrchestrationV2ThreadShell;
+    const secretRef = SecretRef.make("secret-ref:0123456789abcdef0123456789abcdef");
+    const typedValue = "typed-by-the-user-123";
+    const stored: Array<ProjectSecretSetInput> = [];
+    const consumed: Array<string> = [];
+    const layerDependencies = Layer.mergeAll(
+      NodeCrypto.layer,
+      Layer.succeed(McpInvocationContext.McpInvocationContext, {
+        environmentId: EnvironmentId.make("environment"),
+        requestNamespace: "session",
+        thread: { threadId: sourceThreadId, providerSessionId: "session", providerInstanceId },
+        client: undefined,
+        issuedAt: 0,
+        capabilities: new Set(["orchestration" as const]),
+      }),
+      Layer.mock(ThreadManagement.ThreadManagementService)({
+        getThreadShell: () => Effect.succeed(caller),
+      }),
+      Layer.mock(Project.ProjectService)({}),
+      Layer.mock(SecretRequests.SecretRequests)({
+        consume: (input) => {
+          consumed.push(input.ref);
+          return Effect.succeed(typedValue);
+        },
+      }),
+      Layer.mock(ProjectSecrets.ProjectSecrets)({
+        redact: (_, text) => text,
+        hasSecrets: () => false,
+        pendingSecretPrefix: () => 0,
+        set: (input) => {
+          stored.push(input);
+          return Effect.succeed({
+            name: input.name,
+            exposeAs: input.exposeAs ?? "env",
+            scope: { type: "all" },
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          });
+        },
+      }),
+    );
+    const toolkit = yield* ProjectToolkit.pipe(
+      Effect.provide(
+        McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(
+          Layer.provide(layerDependencies),
+        ),
+      ),
+    );
+    const call = (params: Parameters<typeof toolkit.handle<"t3_project_secret_set">>[1]) =>
+      toolkit
+        .handle("t3_project_secret_set", params)
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(layerDependencies));
+
+    const saved = yield* call({ projectId, name: "GH_TOKEN", secretRef });
+    expect(stored).toEqual([{ projectId, name: "GH_TOKEN", value: typedValue }]);
+    expect(consumed).toEqual([secretRef]);
+    expect(saved.at(-1)?.result).toMatchObject({ name: "GH_TOKEN", exposeAs: "env" });
+    expect(JSON.stringify(saved)).not.toContain(typedValue);
+
+    // Handing over both is ambiguous, so nothing is stored or consumed.
+    const both = yield* call({ projectId, name: "GH_TOKEN", value: "other-value", secretRef });
+    expect(both.at(-1)?.isFailure).toBe(true);
+    expect(stored).toHaveLength(1);
+    expect(consumed).toHaveLength(1);
   }),
 );

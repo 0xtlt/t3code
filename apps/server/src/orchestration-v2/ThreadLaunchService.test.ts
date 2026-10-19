@@ -5,6 +5,7 @@ import * as TerminalManager from "../terminal/Manager.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as FileSystem from "effect/FileSystem";
 import * as ServerConfig from "../config.ts";
+import * as ThreadContainers from "../container/ThreadContainers.ts";
 import { createPendingAttachmentId, resolveAttachmentPath } from "../attachmentStore.ts";
 import * as ThreadMessageIntake from "./ThreadMessageIntake.ts";
 import { assert, it, vi } from "@effect/vitest";
@@ -12,6 +13,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
   ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
   ChatAttachmentId,
+  ContainerError,
   ComposerContextId,
   type ChatAttachment,
   CommandId,
@@ -114,6 +116,7 @@ interface HarnessOptions {
   readonly serverSettings?: Parameters<typeof ServerSettings.layerTest>[0];
   readonly providers?: ReadonlyArray<ServerProvider>;
   readonly git?: Partial<GitWorkflow.GitWorkflowService["Service"]>;
+  readonly ensureContainer?: ThreadContainers.ThreadContainers["Service"]["ensure"];
 }
 
 function makeHarness(options: HarnessOptions = {}) {
@@ -150,6 +153,11 @@ function makeHarness(options: HarnessOptions = {}) {
     options.runSetup ?? (() => Effect.succeed({ status: "no-script" as const })),
   );
   const closeTerminal = vi.fn(options.closeTerminal ?? (() => Effect.void));
+  const ensureContainer = vi.fn(
+    options.ensureContainer ??
+      ((threadId: ThreadId) =>
+        Effect.succeed({ threadId, state: "running" as const, forwardedEnv: [] })),
+  );
   const generateBranchName = vi.fn(
     options.generateBranchName ?? (() => Effect.succeed({ branch: "generated-branch" })),
   );
@@ -196,6 +204,10 @@ function makeHarness(options: HarnessOptions = {}) {
     Layer.mock(TextGeneration.TextGeneration)({
       generateThreadTitle,
       generateBranchName,
+    }),
+    Layer.mock(ThreadContainers.ThreadContainers)({
+      ensure: ensureContainer,
+      hostAddress: "host.docker.internal",
     }),
     layerServerSettings,
     ProviderRegistryMock.layer(options.providers),
@@ -258,6 +270,7 @@ function makeHarness(options: HarnessOptions = {}) {
     generateThreadTitle,
     runSetup,
     closeTerminal,
+    ensureContainer,
   };
 }
 
@@ -3064,4 +3077,298 @@ it.effect.each(
         }
       }).pipe(Effect.provide(Layer.merge(harness.layer, layerService)));
     }),
+);
+
+const containerStageIds = (snapshot: { readonly stages: ReadonlyArray<{ readonly id: string }> }) =>
+  snapshot.stages.map((stage) => stage.id);
+
+const awaitSetupPhase = (
+  tracker: WorktreeSetupTracker.WorktreeSetupTracker["Service"],
+  threadId: ThreadId,
+  phase: "done" | "failed",
+) =>
+  tracker.stream(threadId).pipe(
+    Stream.filter((snapshot) => snapshot?.phase === phase),
+    Stream.runHead,
+    Effect.map((head) => Option.getOrThrow(head)!),
+  );
+
+it.effect.each(["worktree", "existing_worktree"] as const)(
+  "prepares the container of a launch with the %s strategy before the setup script",
+  (type) => {
+    const order: Array<string> = [];
+    const harness = makeHarness({
+      runSetup: () =>
+        Effect.sync(() => {
+          order.push("setup-script");
+          return { status: "no-script" as const };
+        }),
+      ensureContainer: (threadId, ensureOptions) =>
+        (ensureOptions?.onOutput?.("Step 1/3 : FROM node") ?? Effect.void).pipe(
+          Effect.tap(() => Effect.sync(() => order.push("container"))),
+          Effect.as({ threadId, state: "running" as const, forwardedEnv: [] }),
+        ),
+    });
+    return Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const tracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const launched = yield* launches.launch(
+        launchInput({
+          command: `command:launch:container:${type}`,
+          thread: `thread:launch:container:${type}`,
+          message: "Work in a container",
+          workspace:
+            type === "worktree"
+              ? { type, baseRef: "main", container: true }
+              : { type, worktreePath: "/repo-worktrees/existing", container: true },
+        }),
+      );
+      assert.isTrue(launched.projection.thread.container);
+      const snapshot = yield* awaitSetupPhase(tracker, launched.threadId, "done");
+      assert.deepEqual(
+        containerStageIds(snapshot),
+        type === "worktree"
+          ? ["fetch", "checkout", "container", "setup-script", "agent"]
+          : ["container", "setup-script", "agent"],
+      );
+      const stage = snapshot.stages.find((entry) => entry.id === "container");
+      assert.equal(stage?.status, "done");
+      assert.deepEqual(stage?.tail, ["Step 1/3 : FROM node"]);
+      assert.deepEqual(order, ["container", "setup-script"]);
+      assert.deepEqual(
+        harness.ensureContainer.mock.calls.map(([threadId]) => threadId),
+        [launched.threadId],
+      );
+      assert.equal(harness.createWorktree.mock.calls.length, type === "worktree" ? 1 : 0);
+      const projection = yield* threads.getThreadProjection(launched.threadId);
+      assert.isTrue(projection.thread.container);
+      assert.equal(
+        projection.thread.worktreePath,
+        type === "worktree" ? "/repo-worktrees/feature" : "/repo-worktrees/existing",
+      );
+    }).pipe(Effect.provide(harness.layer));
+  },
+);
+
+it.effect("leaves threads launched without the container option on the host", () => {
+  const harness = makeHarness();
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const tracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
+    const launched = yield* launches.launch(
+      launchInput({
+        command: "command:launch:no-container",
+        thread: "thread:launch:no-container",
+        message: "Stay on the host",
+        workspace: { type: "worktree", baseRef: "main", container: false },
+      }),
+    );
+    assert.isUndefined(launched.projection.thread.container);
+    const snapshot = yield* awaitSetupPhase(tracker, launched.threadId, "done");
+    assert.deepEqual(containerStageIds(snapshot), ["fetch", "checkout", "setup-script", "agent"]);
+    assert.equal(harness.ensureContainer.mock.calls.length, 0);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("refuses a container launch at the project root without creating a thread", () => {
+  const harness = makeHarness();
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const threadId = ThreadId.make("thread:launch:container-root");
+    const error = yield* launches
+      .launch(
+        launchInput({
+          command: "command:launch:container-root",
+          thread: threadId,
+          message: "No isolation here",
+          workspace: { type: "root", container: true },
+        }),
+      )
+      .pipe(Effect.flip);
+    if (error._tag !== "ThreadLaunchError") return assert.fail(`Unexpected ${error._tag}`);
+    assert.equal(error.operation, "validate-workspace");
+    assert.match(String(error.cause), /own worktree/u);
+    assert.isNull(yield* threads.getThreadShell(threadId));
+    assert.equal(harness.ensureContainer.mock.calls.length, 0);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("refuses to turn an existing thread into a container thread", () => {
+  const harness = makeHarness();
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const threadId = ThreadId.make("thread:launch:container-reuse");
+    yield* threads.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("command:launch:container-reuse:create"),
+      threadId,
+      projectId,
+      title: "Existing",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "user",
+      creationSource: "web",
+    });
+    const error = yield* launches
+      .launch({
+        ...launchInput({
+          command: "command:launch:container-reuse",
+          thread: threadId,
+          message: "Too late",
+          workspace: { type: "worktree", baseRef: "main", container: true },
+        }),
+        reuseExistingThread: true,
+      })
+      .pipe(Effect.flip);
+    if (error._tag !== "ThreadLaunchError") return assert.fail(`Unexpected ${error._tag}`);
+    assert.equal(error.operation, "validate-workspace");
+    assert.equal(harness.createWorktree.mock.calls.length, 0);
+    assert.isUndefined((yield* threads.getThreadProjection(threadId)).thread.container);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("fails preparation with the container error and retries into a container thread", () => {
+  let failures = 1;
+  const harness = makeHarness({
+    ensureContainer: (threadId, ensureOptions) =>
+      failures-- > 0
+        ? (ensureOptions?.onOutput?.("docker: daemon not running") ?? Effect.void).pipe(
+            Effect.andThen(
+              Effect.fail(new ContainerError({ message: "Docker is installed but not running." })),
+            ),
+          )
+        : Effect.succeed({ threadId, state: "running" as const, forwardedEnv: [] }),
+  });
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const tracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const launched = yield* launches.launch(
+      launchInput({
+        command: "command:launch:container-failure",
+        thread: "thread:launch:container-failure",
+        message: "Needs a container",
+        workspace: { type: "worktree", baseRef: "main", container: true },
+      }),
+    );
+    const failedSetup = yield* awaitSetupPhase(tracker, launched.threadId, "failed");
+    assert.equal(failedSetup.stages.find((entry) => entry.id === "container")?.status, "failed");
+    assert.include(failedSetup.error ?? "", "Docker is installed but not running.");
+    assert.equal(harness.runSetup.mock.calls.length, 0);
+    yield* threads.streamStoredEventsFrom({ threadId: launched.threadId }).pipe(
+      Stream.filter(
+        (stored) => stored.event.type === "run.updated" && stored.event.payload.status === "failed",
+      ),
+      Stream.runHead,
+    );
+    const failed = yield* threads.getThreadProjection(launched.threadId);
+    assert.include(
+      failed.turnItems.find((item) => item.type === "error")?.failure.message ?? "",
+      "Docker is installed but not running.",
+    );
+
+    const outbox = yield* EffectOutbox.EffectOutboxV2;
+    yield* launches.retryPreparation({
+      commandId: CommandId.make("command:launch:container-failure:1"),
+      threadId: launched.threadId,
+      runId: failed.runs[0]!.id,
+    });
+    yield* waitUntil(() =>
+      outbox
+        .listByCommandId(CommandId.make("command:launch:container-failure:1:release"))
+        .pipe(Effect.map((effects) => effects.length === 1)),
+    );
+    assert.equal(harness.ensureContainer.mock.calls.length, 2);
+    assert.equal(harness.createWorktree.mock.calls.length, 1);
+    assert.equal(
+      (yield* threads.getThreadProjection(launched.threadId)).runs[0]?.status,
+      "starting",
+    );
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect(
+  "queues container removal on archive and a purge on delete, for container threads only",
+  () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const outbox = yield* EffectOutbox.EffectOutboxV2;
+      const create = (name: string, container: boolean) =>
+        threads
+          .dispatch({
+            type: "thread.create",
+            commandId: CommandId.make(`command:cleanup:${name}:create`),
+            threadId: ThreadId.make(`thread:cleanup:${name}`),
+            projectId,
+            title: name,
+            modelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: "feature",
+            worktreePath: "/repo-worktrees/feature",
+            ...(container ? { container } : {}),
+            createdBy: "user",
+            creationSource: "web",
+          })
+          .pipe(Effect.as(ThreadId.make(`thread:cleanup:${name}`)));
+      const containerRequests = (commandId: string) =>
+        outbox
+          .listByCommandId(CommandId.make(commandId))
+          .pipe(
+            Effect.map((effects) =>
+              effects.map((effect) => effect.request).filter((r) => r.type === "container.cleanup"),
+            ),
+          );
+
+      const containerThread = yield* create("container", true);
+      const hostThread = yield* create("host", false);
+      assert.isTrue((yield* threads.getThreadProjection(containerThread)).thread.container);
+      assert.isTrue((yield* threads.getThreadShell(containerThread))?.container);
+      assert.isUndefined((yield* threads.getThreadShell(hostThread))?.container);
+
+      for (const [name, threadId] of [
+        ["container", containerThread],
+        ["host", hostThread],
+      ] as const) {
+        yield* threads.dispatch({
+          type: "thread.archive",
+          commandId: CommandId.make(`command:cleanup:${name}:archive`),
+          threadId,
+        });
+      }
+      assert.deepEqual(yield* containerRequests("command:cleanup:container:archive"), [
+        { type: "container.cleanup", purge: false },
+      ]);
+      assert.deepEqual(yield* containerRequests("command:cleanup:host:archive"), []);
+
+      yield* threads.dispatch({
+        type: "thread.unarchive",
+        commandId: CommandId.make("command:cleanup:container:unarchive"),
+        threadId: containerThread,
+      });
+      assert.deepEqual(yield* containerRequests("command:cleanup:container:unarchive"), []);
+
+      for (const [name, threadId] of [
+        ["container", containerThread],
+        ["host", hostThread],
+      ] as const) {
+        yield* threads.dispatch({
+          type: "thread.delete",
+          commandId: CommandId.make(`command:cleanup:${name}:delete`),
+          threadId,
+        });
+      }
+      assert.deepEqual(yield* containerRequests("command:cleanup:container:delete"), [
+        { type: "container.cleanup", purge: true },
+      ]);
+      assert.deepEqual(yield* containerRequests("command:cleanup:host:delete"), []);
+    }).pipe(Effect.provide(harness.layer));
+  },
 );

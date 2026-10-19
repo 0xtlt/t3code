@@ -37,6 +37,8 @@ import { ProviderWorkspaceMissingError } from "../provider/Errors.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
+import { makeFakeThreadContainers } from "../container/ThreadContainers.testkit.ts";
+import type { ThreadContainers } from "../container/ThreadContainers.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -226,6 +228,7 @@ function makeThreadCreatedEvent(input: {
   readonly threadId: ThreadId;
   readonly now: DateTime.Utc;
   readonly projectId?: ProjectId;
+  readonly container?: boolean;
 }) {
   return Effect.gen(function* () {
     const projectId =
@@ -263,6 +266,7 @@ function makeThreadCreatedEvent(input: {
       settledAt: null,
       lastVisitedAt: null,
       deletedAt: null,
+      ...(input.container === true ? { container: true } : {}),
     };
     return {
       id: yield* input.idAllocator.allocate.event({ threadId: input.threadId }),
@@ -337,6 +341,7 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
     readonly beforeUnload?: Effect.Effect<void>;
     readonly spawnBeforeOpen?: boolean;
     readonly scopeCloseReached?: Deferred.Deferred<void>;
+    readonly driver?: ProviderDriverKind;
   } = {},
 ) {
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
@@ -357,7 +362,7 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
   );
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId: ProviderInstanceId.make("codex"),
-    driver: CODEX_DRIVER,
+    driver: options.driver ?? CODEX_DRIVER,
     getCapabilities: () => Effect.succeed(options.capabilities ?? CodexCapabilities),
     planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" }),
     openSession: (input) =>
@@ -488,6 +493,8 @@ function layerTest(input: {
   readonly scopeCloseReached?: Deferred.Deferred<void>;
   readonly serverSettingsLayer?: ReturnType<typeof ServerSettings.layerTest>;
   readonly projectServiceLayer?: Layer.Layer<ProjectService.ProjectService>;
+  readonly driver?: ProviderDriverKind;
+  readonly threadContainersLayer?: Layer.Layer<ThreadContainers>;
 }) {
   const layerConfiguredEventSink =
     input.flakyReleaseWrites !== undefined
@@ -523,6 +530,7 @@ function layerTest(input: {
       ...(input.scopeCloseReached === undefined
         ? {}
         : { scopeCloseReached: input.scopeCloseReached }),
+      ...(input.driver === undefined ? {} : { driver: input.driver }),
     }).pipe(Effect.map(ProviderAdapterRegistry.layerSingle)),
   );
   const layerConfiguredMcpRegistry =
@@ -565,6 +573,7 @@ function layerTest(input: {
           layerTestStores,
           ...(input.serverSettingsLayer === undefined ? [] : [input.serverSettingsLayer]),
           ...(input.projectServiceLayer === undefined ? [] : [input.projectServiceLayer]),
+          ...(input.threadContainersLayer === undefined ? [] : [input.threadContainersLayer]),
         ),
       ),
     ),
@@ -4907,4 +4916,130 @@ it.effect(
       });
       assert.isFalse(denied?.capabilities?.has("device"));
     }),
+);
+
+const runContainerOpen = (input: {
+  readonly container: boolean;
+  readonly driver?: ProviderDriverKind;
+  readonly ensureError?: string;
+  readonly detachBeforeReopen?: boolean;
+}) =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    const mcpConfigs = yield* Ref.make<
+      ReadonlyArray<McpProviderSession.McpProviderSessionConfig | undefined>
+    >([]);
+    const threadId = ThreadId.make("thread-provider-session-manager-container");
+    const fake = makeFakeThreadContainers({
+      containerThreads: input.container ? [threadId] : [],
+      ...(input.ensureError === undefined ? {} : { ensureError: input.ensureError }),
+    });
+    const exit = yield* Effect.gen(function* () {
+      const eventSink = yield* EventSink.EventSinkV2;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const now = yield* DateTime.now;
+      const providerSessionId = yield* idAllocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId,
+      });
+      yield* eventSink.write({
+        events: [
+          yield* makeThreadCreatedEvent({ idAllocator, threadId, now, container: input.container }),
+        ],
+      });
+      const open = manager
+        .open({ threadId, providerSessionId, modelSelection, runtimePolicy })
+        .pipe(Effect.exit);
+      if (input.detachBeforeReopen !== true) return yield* open;
+      yield* open;
+      yield* manager.detach({ providerSessionId, threadId });
+      return yield* open;
+    }).pipe(
+      Effect.provide(
+        layerTest({
+          state,
+          idleTimeoutMs: 60_000,
+          mcpConfigs,
+          threadContainersLayer: fake.layer,
+          ...(input.driver === undefined ? {} : { driver: input.driver }),
+        }),
+      ),
+    );
+    return { exit, fake, state, mcpConfigs };
+  });
+
+it.effect(
+  "ProviderSessionManagerV2 ensures the container before a container thread's provider starts",
+  () =>
+    Effect.gen(function* () {
+      const { exit, fake, state, mcpConfigs } = yield* runContainerOpen({ container: true });
+      assert.isTrue(Exit.isSuccess(exit));
+      assert.deepEqual(fake.ensured, ["thread-provider-session-manager-container"]);
+      assert.equal((yield* Ref.get(state)).openCount, 1);
+      const endpoint = (yield* Ref.get(mcpConfigs))[0]?.endpoint;
+      assert.isDefined(endpoint);
+      assert.equal(new URL(endpoint!).hostname, "host.docker.internal");
+    }),
+);
+
+it.effect(
+  "ProviderSessionManagerV2 recreates the container when a detached container thread reopens",
+  () =>
+    Effect.gen(function* () {
+      const { exit, fake, state } = yield* runContainerOpen({
+        container: true,
+        detachBeforeReopen: true,
+      });
+      assert.isTrue(Exit.isSuccess(exit));
+      assert.deepEqual(fake.ensured, [
+        "thread-provider-session-manager-container",
+        "thread-provider-session-manager-container",
+      ]);
+      assert.equal((yield* Ref.get(state)).openCount, 2);
+    }),
+);
+
+it.effect(
+  "ProviderSessionManagerV2 leaves the MCP endpoint and container alone for other threads",
+  () =>
+    Effect.gen(function* () {
+      const { exit, fake, mcpConfigs } = yield* runContainerOpen({ container: false });
+      assert.isTrue(Exit.isSuccess(exit));
+      assert.deepEqual(fake.ensured, []);
+      const endpoint = (yield* Ref.get(mcpConfigs))[0]?.endpoint;
+      assert.isDefined(endpoint);
+      assert.notEqual(new URL(endpoint!).hostname, "host.docker.internal");
+    }),
+);
+
+it.effect("ProviderSessionManagerV2 refuses a provider that can't run in a container thread", () =>
+  Effect.gen(function* () {
+    const { exit, fake, state } = yield* runContainerOpen({
+      container: true,
+      driver: ProviderDriverKind.make("cursor"),
+    });
+    assert.isTrue(Exit.isFailure(exit));
+    assert.include(
+      Cause.pretty(Exit.isFailure(exit) ? exit.cause : Cause.empty),
+      "Cursor can't run in a container thread",
+    );
+    assert.deepEqual(fake.ensured, []);
+    assert.equal((yield* Ref.get(state)).openCount, 0);
+  }),
+);
+
+it.effect("ProviderSessionManagerV2 reports why a thread's container could not start", () =>
+  Effect.gen(function* () {
+    const { exit, state } = yield* runContainerOpen({
+      container: true,
+      ensureError: "Docker is not running",
+    });
+    assert.isTrue(Exit.isFailure(exit));
+    assert.include(
+      Cause.pretty(Exit.isFailure(exit) ? exit.cause : Cause.empty),
+      "Docker is not running",
+    );
+    assert.equal((yield* Ref.get(state)).openCount, 0);
+  }),
 );

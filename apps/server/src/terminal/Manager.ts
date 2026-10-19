@@ -31,6 +31,7 @@ import {
   ClaudeSettings,
   CodexSettings,
   ProviderInstanceId,
+  ThreadId,
 } from "@t3tools/contracts";
 import { makeKeyedCoalescingWorker } from "@t3tools/shared/KeyedCoalescingWorker";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
@@ -69,6 +70,8 @@ import {
 } from "../observability/Metrics.ts";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as ProcessRunner from "../processRunner.ts";
+import { ProjectSecrets } from "../secrets/ProjectSecrets.ts";
+import { redactStreamChunk } from "../secrets/redactStream.ts";
 import * as PortScanner from "../preview/PortScanner.ts";
 import * as NativeTelemetryClient from "../resourceTelemetry/NativeTelemetryClient.ts";
 import * as PtyAdapter from "@t3tools/shared/PtyAdapter";
@@ -239,6 +242,8 @@ interface TerminalSessionState {
   pid: number | null;
   history: BoundedTerminalHistory;
   pendingHistoryControlSequence: string;
+  /** Output tail held back because it may be the start of a project secret split across chunks. */
+  redactCarry: string;
   pendingProcessEvents: Array<PendingProcessEvent>;
   pendingProcessEventIndex: number;
   processEventDrainRunning: boolean;
@@ -268,6 +273,7 @@ type PendingProcessEvent =
 
 type DrainProcessEventAction =
   | { type: "idle" }
+  | { type: "held" }
   | {
       type: "output";
       threadId: string;
@@ -1419,6 +1425,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   const platform = yield* HostProcess.Platform;
   const architecture = yield* HostProcess.Architecture;
   const agentScope = yield* AgentScope;
+  // Redacts the secrets of a container thread's project from its terminal output.
+  const projectSecrets = yield* Effect.serviceOption(ProjectSecrets);
   // Terminals must inherit the user's full environment (minus the blocklist
   // applied in createTerminalSpawnEnv) — an allowlist here silently strips
   // things like PSModulePath, DISPLAY, proxies, and toolchain variables.
@@ -1990,9 +1998,21 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         }
 
         if (nextEvent.type === "output") {
+          let data = nextEvent.data;
+          if (Option.isSome(projectSecrets)) {
+            const redacted = redactStreamChunk(
+              projectSecrets.value,
+              ThreadId.make(session.threadId),
+              session.redactCarry,
+              data,
+            );
+            session.redactCarry = redacted.carry;
+            data = redacted.text;
+            if (data.length === 0) return { type: "held" } as const;
+          }
           const sanitized = sanitizeTerminalHistoryChunk(
             session.pendingHistoryControlSequence,
-            nextEvent.data,
+            data,
           );
           session.pendingHistoryControlSequence = sanitized.pendingControlSequence;
           if (sanitized.visibleText.length > 0) {
@@ -2006,7 +2026,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             terminalId: session.terminalId,
             sequence: eventStamp.sequence,
             history: sanitized.visibleText.length > 0 ? session.history : null,
-            data: nextEvent.data,
+            data,
           } as const;
         }
 
@@ -2018,6 +2038,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         session.childCommandLabel = null;
         session.status = "exited";
         session.pendingHistoryControlSequence = "";
+        session.redactCarry = "";
         session.pendingProcessEvents = [];
         session.pendingProcessEventIndex = 0;
         session.processEventDrainRunning = false;
@@ -2042,6 +2063,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
 
       if (action.type === "idle") {
         return;
+      }
+
+      if (action.type === "held") {
+        continue;
       }
 
       if (action.type === "output") {
@@ -2090,6 +2115,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       session.childCommandLabel = null;
       session.status = "exited";
       session.pendingHistoryControlSequence = "";
+      session.redactCarry = "";
       session.pendingProcessEvents = [];
       session.pendingProcessEventIndex = 0;
       session.processEventDrainRunning = false;
@@ -2135,10 +2161,14 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       );
     }
 
+    // The thread id would also make the host scope track this shell as the
+    // thread's agent for OOM reporting, so only a container thread passes it.
+    const containerThread = yield* agentScope.inContainer(session.threadId);
     const launch = yield* agentScope.wrap({
       command: candidate.shell,
       args: candidate.args ?? [],
       name: "terminal",
+      ...(containerThread ? { threadId: session.threadId } : {}),
       env: spawnEnv,
       survivesRestart: true,
     });
@@ -2565,6 +2595,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         pid: null,
         history,
         pendingHistoryControlSequence: "",
+        redactCarry: "",
         pendingProcessEvents: [],
         pendingProcessEventIndex: 0,
         processEventDrainRunning: false,
@@ -2627,6 +2658,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       liveSession.runtimeEnv = nextRuntimeEnv;
       liveSession.history.clear();
       liveSession.pendingHistoryControlSequence = "";
+      liveSession.redactCarry = "";
       liveSession.pendingProcessEvents = [];
       liveSession.pendingProcessEventIndex = 0;
       liveSession.processEventDrainRunning = false;
@@ -2636,6 +2668,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       liveSession.worktreePath = nextWorktreePath;
       liveSession.history.clear();
       liveSession.pendingHistoryControlSequence = "";
+      liveSession.redactCarry = "";
       liveSession.pendingProcessEvents = [];
       liveSession.pendingProcessEventIndex = 0;
       liveSession.processEventDrainRunning = false;
@@ -2969,6 +3002,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         const session = yield* requireSession(input.threadId, terminalId);
         session.history.clear();
         session.pendingHistoryControlSequence = "";
+        session.redactCarry = "";
         session.pendingProcessEvents = [];
         session.pendingProcessEventIndex = 0;
         session.processEventDrainRunning = false;
@@ -3004,6 +3038,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           pid: null,
           history: new BoundedTerminalHistory(historyLineLimit, "", historyByteLimit),
           pendingHistoryControlSequence: "",
+          redactCarry: "",
           pendingProcessEvents: [],
           pendingProcessEventIndex: 0,
           processEventDrainRunning: false,
@@ -3041,6 +3076,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
 
       session.history.clear();
       session.pendingHistoryControlSequence = "";
+      session.redactCarry = "";
       session.pendingProcessEvents = [];
       session.pendingProcessEventIndex = 0;
       session.processEventDrainRunning = false;

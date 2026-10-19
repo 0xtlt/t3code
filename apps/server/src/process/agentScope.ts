@@ -337,6 +337,7 @@ export const make = Effect.gen(function* () {
       return agentScopeCommand({ command: resolved, args, scope: systemdScope });
     }),
     oomKilled,
+    inContainer: AgentScope.defaultValue().inContainer,
     clear,
   } satisfies AgentScopeShape;
 });

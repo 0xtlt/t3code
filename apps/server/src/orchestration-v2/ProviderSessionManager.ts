@@ -4,6 +4,7 @@ import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import {
   isOrchestrationV2WorkActive,
   ModelSelection,
+  PROVIDER_DISPLAY_NAMES,
   OrchestrationV2DomainEvent,
   OrchestrationV2ProviderSession,
   type OrchestrationV2ProviderThread,
@@ -11,6 +12,7 @@ import {
   ProviderInstanceId,
   ProviderSessionId,
   ThreadId,
+  type ProviderDriverKind,
   type ProviderThreadId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -40,7 +42,11 @@ import {
   providerTurnsTotal,
   withMetrics,
 } from "../observability/Metrics.ts";
-import { ProviderWorkspaceMissingError } from "../provider/Errors.ts";
+import { ProviderContainerError, ProviderWorkspaceMissingError } from "../provider/Errors.ts";
+import { ThreadContainers } from "../container/ThreadContainers.ts";
+import { ProjectSecrets } from "../secrets/ProjectSecrets.ts";
+import { makeLiveOutputRedactor } from "../secrets/LiveOutputRedactor.ts";
+import { rewriteMcpEndpointHost } from "../container/mcpEndpoint.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as ServerSettings from "../serverSettings.ts";
@@ -61,6 +67,8 @@ const busyTurnPrefix = (providerThreadId: ProviderThreadId) => `${providerThread
 const busyTurnKey = (providerThreadId: ProviderThreadId, runOrdinal: number) =>
   `${busyTurnPrefix(providerThreadId)}${runOrdinal}`;
 const UNLOAD_THREAD_TIMEOUT_MS = 10 * 1000;
+/** Drivers whose CLI T3 can run inside a thread container. Every other driver is refused, never run on the host. */
+const CONTAINER_PROVIDER_DRIVERS: ReadonlySet<string> = new Set(["claudeAgent", "codex"]);
 
 export const ProviderSessionReleaseReason = Schema.Literals([
   "idle_timeout",
@@ -135,6 +143,7 @@ export class ProviderSessionActivityError extends Schema.TaggedError<ProviderSes
 export const ProviderSessionManagerV2Error = Schema.Union([
   ProviderSessionOpenError,
   ProviderWorkspaceMissingError,
+  ProviderContainerError,
   ProviderSessionLookupError,
   ProviderSessionCloseError,
   ProviderSessionReleaseError,
@@ -329,6 +338,46 @@ export const layerWithOptions = (
       const providerEventIngestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
       const agentScope = yield* AgentScope;
+      /**
+       * Present once the server can run container threads. A thread created
+       * with `container: true` never starts without it (see `prepareContainer`).
+       */
+      const threadContainers = yield* Effect.serviceOption(ThreadContainers);
+      const isContainerThread = (threadId: ThreadId) =>
+        projectionStore.getThread(threadId).pipe(
+          Effect.map((thread) => thread.container === true),
+          Effect.catchTags({ ProjectionStoreThreadNotFoundError: () => Effect.succeed(false) }),
+        );
+      const projectSecrets = yield* Effect.serviceOption(ProjectSecrets);
+      const liveOutput = makeLiveOutputRedactor({
+        secrets: Option.getOrUndefined(projectSecrets),
+        inContainer: (threadId) => agentScope.inContainer(threadId),
+      });
+      /** The host name a container reaches this server at, for container threads only. */
+      const containerMcpHost = (threadId: ThreadId) =>
+        Option.isNone(threadContainers)
+          ? Effect.succeed(undefined)
+          : isContainerThread(threadId).pipe(
+              Effect.map((container) =>
+                container ? threadContainers.value.hostAddress : undefined,
+              ),
+              Effect.orElseSucceed(() => undefined),
+            );
+      const prepareContainer = (input: { readonly threadId: ThreadId; readonly driver: string }) =>
+        Effect.gen(function* () {
+          const fail = (message: string) =>
+            new ProviderContainerError({ threadId: input.threadId, message });
+          if (!CONTAINER_PROVIDER_DRIVERS.has(input.driver)) {
+            const name = PROVIDER_DISPLAY_NAMES[input.driver as ProviderDriverKind] ?? input.driver;
+            return yield* fail(`${name} can't run in a container thread yet.`);
+          }
+          if (Option.isNone(threadContainers)) {
+            return yield* fail("Container threads aren't available on this server.");
+          }
+          yield* threadContainers.value
+            .ensure(input.threadId)
+            .pipe(Effect.mapError((error) => fail(error.message)));
+        });
       const agentAccessSettings = Effect.fn("ProviderSessionManagerV2.agentAccessSettings")(
         function* (threadId: ThreadId) {
           if (Option.isNone(serverSettings)) return { browser: true, device: false };
@@ -491,7 +540,15 @@ export const layerWithOptions = (
                   browserToolsAvailable,
                   capabilities,
                 });
-                yield* mcpSessions.set(credential.config);
+                const mcpHost = yield* containerMcpHost(threadId);
+                yield* mcpSessions.set(
+                  mcpHost === undefined
+                    ? credential.config
+                    : {
+                        ...credential.config,
+                        endpoint: rewriteMcpEndpointHost(credential.config.endpoint, mcpHost),
+                      },
+                );
                 reserveMcpCredential(threadId, credential.config.providerSessionId);
                 return { mcpCredentialId: credential.config.providerSessionId, issued: true };
               }),
@@ -1917,17 +1974,25 @@ export const layerWithOptions = (
             // Live output skips run subscribers and ingestion entirely: it is
             // never persisted, and a flood of it must not queue ahead of real events.
             if (event.type === "command_output.delta") {
-              return commandOutput.append(event);
+              return liveOutput
+                .redact(event)
+                .pipe(Effect.flatMap((chunk) => commandOutput.append({ ...event, chunk })));
             }
             // A settled item carries its final output, so its live tail can go.
             const releaseLiveOutput =
               event.type === "turn_item.updated" &&
               event.turnItem.type === "command_execution" &&
               !isOrchestrationV2WorkActive(event.turnItem.status)
-                ? commandOutput.finish({
-                    threadId: event.turnItem.threadId,
-                    itemId: event.turnItem.id,
-                  })
+                ? Effect.sync(() =>
+                    liveOutput.release(event.turnItem.threadId, event.turnItem.id),
+                  ).pipe(
+                    Effect.andThen(
+                      commandOutput.finish({
+                        threadId: event.turnItem.threadId,
+                        itemId: event.turnItem.id,
+                      }),
+                    ),
+                  )
                 : Effect.void;
             if (
               event.type === "provider_session.updated" &&
@@ -2081,10 +2146,26 @@ export const layerWithOptions = (
                   });
                 }
               }
+              const containerThread = yield* isContainerThread(input.threadId).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderSessionOpenError({
+                      instanceId: input.modelSelection.instanceId,
+                      providerSessionId: input.providerSessionId,
+                      cause,
+                    }),
+                ),
+              );
               const key = sessionKey(input.providerSessionId);
               const existing = (yield* Ref.get(sessions)).get(key);
               if (existing !== undefined) {
                 const attached = existing.attachedThreadIds.has(input.threadId);
+                if (!attached && containerThread) {
+                  return yield* new ProviderContainerError({
+                    threadId: input.threadId,
+                    message: "A container thread needs a provider session of its own.",
+                  });
+                }
                 if (!attached && !existing.supportsMultipleProviderThreads) {
                   return yield* new ProviderSessionOpenError({
                     instanceId: input.modelSelection.instanceId,
@@ -2112,6 +2193,9 @@ export const layerWithOptions = (
                     }),
                 ),
               );
+              if (containerThread) {
+                yield* prepareContainer({ threadId: input.threadId, driver: adapter.driver });
+              }
               const prepared = yield* prepareMcpSession(
                 input.threadId,
                 input.modelSelection.instanceId,
@@ -2411,9 +2495,14 @@ export const layerWithOptions = (
             if (Option.isNone(detached)) {
               return;
             }
+            // A container thread's session is never shared, and its process
+            // lives in a container that stop, rebuild, and archive remove, so
+            // keeping it loaded for a later re-attach would only keep a dead
+            // process around for the next turn to reuse.
             if (
               detached.value.attachedThreadIds.size === 0 &&
-              !detached.value.supportsMultipleProviderThreads
+              (!detached.value.supportsMultipleProviderThreads ||
+                (yield* isContainerThread(input.threadId)))
             ) {
               yield* releaseEntry({
                 providerSessionId: input.providerSessionId,

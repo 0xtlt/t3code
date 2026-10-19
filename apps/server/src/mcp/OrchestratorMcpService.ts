@@ -2003,7 +2003,14 @@ const make = Effect.gen(function* () {
                 ),
               );
           }
-          workspaceStrategy = { type: "worktree", baseRef: base.commitSha, startFromOrigin: false };
+          workspaceStrategy = {
+            type: "worktree",
+            baseRef: base.commitSha,
+            startFromOrigin: false,
+            // A child of a container thread must not escape the isolation by
+            // getting a host worktree; it inherits the flag, not a choice.
+            ...(parent.thread.container === true ? { container: true } : {}),
+          };
         }
         // ThreadManagementService.dispatch is the chokepoint for this command
         // type's own enablement check, using the same command id and its
@@ -2329,6 +2336,9 @@ const make = Effect.gen(function* () {
                   interactionMode,
                   branch: parent.thread.branch,
                   worktreePath: parent.thread.worktreePath,
+                  // Same checkout as a container parent: these threads must
+                  // not step out of its isolation onto the host.
+                  ...(parent.thread.container === true ? { container: true } : {}),
                 })
                 .pipe(
                   Effect.mapError((error) =>

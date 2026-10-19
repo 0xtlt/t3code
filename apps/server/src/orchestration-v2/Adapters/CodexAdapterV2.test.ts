@@ -30,6 +30,7 @@ import {
   TurnItemId,
 } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
+import { AgentScope } from "@t3tools/shared/AgentScope";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 import * as CodexClient from "effect-codex-app-server/client";
@@ -780,6 +781,76 @@ describe("CodexAdapterV2 process spawning", () => {
         ["app-server", "--enable", "env-feature"],
       ]);
     }).pipe(Effect.provideService(HostProcess.Platform, "linux")),
+  );
+
+  it.effect(
+    "hands the container scope the thread, so a container thread gets its own app-server",
+    () =>
+      Effect.gen(function* () {
+        const wrapped: Array<{
+          readonly name: string;
+          readonly threadId: string | undefined;
+          readonly env: NodeJS.ProcessEnv | undefined;
+        }> = [];
+        const spawned: Array<{ readonly command: string; readonly args: ReadonlyArray<string> }> =
+          [];
+        const scope = {
+          ...AgentScope.defaultValue(),
+          wrap: (input: {
+            readonly name: string;
+            readonly threadId?: string | undefined;
+            readonly env?: NodeJS.ProcessEnv | undefined;
+          }) =>
+            Effect.sync(() => {
+              wrapped.push({ name: input.name, threadId: input.threadId, env: input.env });
+              return {
+                command: "docker",
+                args: ["exec", "-i", "t3-container", "codex", "app-server"],
+              };
+            }),
+        };
+        const spawner = ChildProcessSpawner.make((command) => {
+          if (ChildProcess.isStandardCommand(command)) {
+            spawned.push({ command: command.command, args: command.args });
+          }
+          return Effect.fail(
+            PlatformError.systemError({
+              _tag: "NotFound",
+              module: "ChildProcess",
+              method: "spawn",
+            }),
+          );
+        });
+        const factory = yield* CodexAdapterV2.CodexAppServerClientFactory.pipe(
+          Effect.provide(CodexAdapterV2.layerAppServerClientFactory),
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.provideService(
+            ProviderEventLoggers.ProviderEventLoggers,
+            ProviderEventLoggers.NoOpProviderEventLoggers,
+          ),
+          Effect.provideService(AgentScope, scope),
+        );
+        yield* factory
+          .open({
+            instanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
+            threadId: ThreadId.make("thread-container-codex"),
+            providerSessionId: ProviderSessionId.make("provider-session-container-codex"),
+            runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              cwd: "/workspace",
+            }),
+            settings: { ...DEFAULT_CODEX_SETTINGS, homePath: "/host/codex-home" },
+            environment: {},
+          })
+          .pipe(Effect.scoped, Effect.exit);
+
+        assert.equal(wrapped[0]?.name, "codex");
+        assert.equal(wrapped[0]?.threadId, "thread-container-codex");
+        assert.equal(wrapped[0]?.env?.CODEX_HOME, "/host/codex-home");
+        assert.equal(spawned[0]?.command, "docker");
+        assert.deepEqual(spawned[0]?.args, ["exec", "-i", "t3-container", "codex", "app-server"]);
+      }).pipe(Effect.provideService(HostProcess.Platform, "linux")),
   );
 
   it.effect("expands ~ in the configured binary path before spawning", () =>

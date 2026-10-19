@@ -24,11 +24,14 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
 import { getModelSelectionStringOptionValue, modelSelectionsEqual } from "@t3tools/shared/model";
+import { ProjectSecrets } from "../secrets/ProjectSecrets.ts";
+import { redactDeep } from "../secrets/redactValue.ts";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as EventSink from "./EventSink.ts";
@@ -308,7 +311,26 @@ export const layer: Layer.Layer<
     const threadCommands = yield* ThreadCommandExecutor.ThreadCommandExecutor;
     const analytics = yield* ProviderTurnAnalytics;
     const agentScope = yield* AgentScope;
+    const projectSecrets = yield* Effect.serviceOption(ProjectSecrets);
     const completedTurnAnalytics = new Set<string>();
+    // A thread's container flag never changes, so one lookup per thread is enough.
+    const containerThreads = new Map<string, boolean>();
+
+    // Every domain event passes through `makeDomainEvent`, so this is the one place
+    // tool output, messages, plans, and failures of a container thread are masked
+    // before they are stored or streamed. Other threads pay one Map lookup.
+    const redactPayload = (threadId: ThreadId, payload: OrchestrationV2DomainEvent["payload"]) =>
+      Effect.gen(function* () {
+        if (Option.isNone(projectSecrets)) return payload;
+        let container = containerThreads.get(threadId);
+        if (container === undefined) {
+          container = yield* agentScope.inContainer(threadId);
+          containerThreads.set(threadId, container);
+        }
+        if (!container) return payload;
+        const secrets = projectSecrets.value;
+        return redactDeep(payload, (text) => secrets.redact(threadId, text));
+      });
 
     const makeDomainEvent = (
       input: ProviderEventIngestInput,
@@ -339,7 +361,7 @@ export const layer: Layer.Layer<
             providerInstanceId: input.providerInstanceId,
             rawEventId: input.rawEventId,
             occurredAt,
-            payload: payloadInput.payload,
+            payload: yield* redactPayload(threadId, payloadInput.payload),
           }),
         );
       });

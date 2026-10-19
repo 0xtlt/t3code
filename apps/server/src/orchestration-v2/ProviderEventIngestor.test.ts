@@ -36,9 +36,11 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
+import { AgentScope } from "@t3tools/shared/AgentScope";
 import { toolOutputImages } from "@t3tools/shared/toolOutput";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerConfig from "../config.ts";
+import { ProjectSecrets } from "../secrets/ProjectSecrets.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as EventSink from "./EventSink.ts";
 import * as EventStore from "./EventStore.ts";
@@ -278,6 +280,107 @@ it.effect("records accepted billed turn usage once without billing the context w
     });
   }).pipe(Effect.provide(layerTest.pipe(Layer.provide(layerAnalytics))));
 });
+
+const secretValue = "hunter2";
+const layerSecrets = Layer.mock(ProjectSecrets)({
+  redact: (_threadId, text) => text.replaceAll(secretValue, "***"),
+  hasSecrets: () => false,
+  pendingSecretPrefix: () => 0,
+});
+
+it.effect("masks project secrets in what a container thread's provider reports", () => {
+  const containerScope = { ...AgentScope.defaultValue(), inContainer: () => Effect.succeed(true) };
+  return Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+    const idAllocator = yield* IdAllocator.IdAllocatorV2;
+    const threadEvent = yield* threadCreatedEvent(now);
+    const providerSessionId = yield* idAllocator.allocate.providerSession({
+      providerInstanceId: modelSelection.instanceId,
+      threadId: threadEvent.threadId,
+    });
+    const turnItem = {
+      id: TurnItemId.make("turn-item:container-secret"),
+      threadId: threadEvent.threadId,
+      runId: null,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 1,
+      status: "completed",
+      title: null,
+      startedAt: now,
+      completedAt: now,
+      updatedAt: now,
+      type: "command_execution",
+      input: `echo ${secretValue}`,
+      output: `${secretValue}\n`,
+      exitCode: 0,
+    } satisfies OrchestrationV2TurnItem;
+    const events = yield* ingestor.normalize({
+      providerSessionId,
+      providerInstanceId: modelSelection.instanceId,
+      threadId: threadEvent.threadId,
+      event: { type: "turn_item.updated", driver: CODEX_DRIVER, turnItem },
+    });
+    const payload = events[0]?.payload as Extract<
+      OrchestrationV2TurnItem,
+      { type: "command_execution" }
+    >;
+    assert.equal(payload.input, "echo ***");
+    assert.equal(payload.output, "***\n");
+    assert.equal(payload.exitCode, 0);
+  }).pipe(
+    Effect.provide(layerTest.pipe(Layer.provide(layerSecrets))),
+    Effect.provideService(AgentScope, containerScope),
+  );
+});
+
+it.effect("leaves a host thread's provider events untouched", () =>
+  Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+    const idAllocator = yield* IdAllocator.IdAllocatorV2;
+    const threadEvent = yield* threadCreatedEvent(now);
+    const providerSessionId = yield* idAllocator.allocate.providerSession({
+      providerInstanceId: modelSelection.instanceId,
+      threadId: threadEvent.threadId,
+    });
+    const events = yield* ingestor.normalize({
+      providerSessionId,
+      providerInstanceId: modelSelection.instanceId,
+      threadId: threadEvent.threadId,
+      event: {
+        type: "turn_item.updated",
+        driver: CODEX_DRIVER,
+        turnItem: {
+          id: TurnItemId.make("turn-item:host-secret"),
+          threadId: threadEvent.threadId,
+          runId: null,
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 1,
+          status: "completed",
+          title: null,
+          startedAt: now,
+          completedAt: now,
+          updatedAt: now,
+          type: "command_execution",
+          input: `echo ${secretValue}`,
+          output: secretValue,
+          exitCode: 0,
+        },
+      },
+    });
+    const payload = events[0]?.payload as { readonly output?: string };
+    assert.equal(payload.output, secretValue);
+  }).pipe(Effect.provide(layerTest.pipe(Layer.provide(layerSecrets)))),
+);
 
 layer("ProviderEventIngestorV2", (it) => {
   it.effect("normalizes provider events through the real event log and projection store", () =>

@@ -37,6 +37,7 @@ import {
 } from "@t3tools/shared/git";
 
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
+import * as ThreadContainers from "../container/ThreadContainers.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
@@ -51,17 +52,24 @@ import { randomUuidV4 } from "@t3tools/provider-core/server/randomUuid";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 
 export type ThreadLaunchWorkspaceStrategy =
-  | { readonly type: "root"; readonly branch?: string | undefined }
+  | {
+      readonly type: "root";
+      readonly branch?: string | undefined;
+      /** Always rejected: present so the request is refused rather than run on the host. */
+      readonly container?: boolean | undefined;
+    }
   | {
       readonly type: "existing_worktree";
       readonly worktreePath: string;
       readonly branch?: string | undefined;
+      readonly container?: boolean | undefined;
     }
   | {
       readonly type: "worktree";
       readonly baseRef: string;
       readonly branch?: string | undefined;
       readonly startFromOrigin?: boolean | undefined;
+      readonly container?: boolean | undefined;
     };
 
 export interface ThreadLaunchInitialMessage {
@@ -123,7 +131,9 @@ export class ThreadLaunchError extends Schema.TaggedError<ThreadLaunchError>()(
       "resolve-project",
       "read-receipt",
       "generate-metadata",
+      "validate-workspace",
       "provision-worktree",
+      "prepare-container",
       "run-setup-script",
       "create-thread",
       "update-thread",
@@ -185,6 +195,9 @@ export class ThreadLaunchService extends Context.Service<
 
 const isThreadLaunchError = Schema.is(ThreadLaunchError);
 
+const isContainerStrategy = (strategy: ThreadLaunchWorkspaceStrategy) =>
+  strategy.type !== "root" && strategy.container === true;
+
 function failureDetail(error: unknown): string {
   if (isThreadLaunchError(error)) {
     const cause = error.cause;
@@ -202,6 +215,7 @@ const make = Effect.gen(function* () {
   const git = yield* GitWorkflow.GitWorkflowService;
   const setupScripts = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
+  const containers = yield* ThreadContainers.ThreadContainers;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const textGeneration = yield* TextGeneration.TextGeneration;
   const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
@@ -251,6 +265,46 @@ const make = Effect.gen(function* () {
       )("Only an empty active thread in the target project can change workspace during launch.");
     }
   });
+
+  // A thread's container flag is fixed at creation, so a launch that reuses an
+  // existing thread cannot turn one on.
+  const validateContainerStrategy = Effect.fn("ThreadLaunchService.validateContainerStrategy")(
+    function* (
+      input: ThreadLaunchInput,
+      threadId: ThreadId,
+      launchReceipt: Option.Option<unknown>,
+    ) {
+      const strategy = input.workspaceStrategy;
+      if (strategy.container !== true) return;
+      if (strategy.type === "root") {
+        return yield* mapError(
+          input,
+          "validate-workspace",
+          threadId,
+        )(
+          new Error(
+            "Container threads need their own worktree: use a new or existing worktree instead of the project root.",
+          ),
+        );
+      }
+      if (input.reuseExistingThread === true && Option.isNone(launchReceipt)) {
+        const shell = yield* threads
+          .getThreadShell(threadId)
+          .pipe(Effect.mapError(mapError(input, "validate-workspace", threadId)));
+        if (shell?.container !== true) {
+          return yield* mapError(
+            input,
+            "validate-workspace",
+            threadId,
+          )(
+            new Error(
+              "This thread was not created as a container thread. Create a new thread with the container option instead.",
+            ),
+          );
+        }
+      }
+    },
+  );
 
   const checkWorktreeBase: ThreadLaunchService["Service"]["checkWorktreeBase"] = Effect.fn(
     "ThreadLaunchService.checkWorktreeBase",
@@ -302,7 +356,9 @@ const make = Effect.gen(function* () {
     );
 
     const reused = input.reusedWorktree;
-    const tracked = input.workspaceStrategy.type === "worktree" || reused !== undefined;
+    const isContainer = isContainerStrategy(input.workspaceStrategy);
+    const tracked =
+      input.workspaceStrategy.type === "worktree" || reused !== undefined || isContainer;
     let createdWorktreePath: string | null = null;
     let setupTerminalId: string | null = null;
     let workspaceRecorded = false;
@@ -312,15 +368,21 @@ const make = Effect.gen(function* () {
         threadId,
         branch: input.workspaceStrategy.branch ?? null,
         baseRef: input.workspaceStrategy.baseRef,
-        stages: ["fetch", "checkout", "setup-script", "agent"],
+        stages: [
+          "fetch",
+          "checkout",
+          ...(isContainer ? (["container"] as const) : []),
+          "setup-script",
+          "agent",
+        ],
         fiber: yield* Effect.fiber,
       });
-    } else if (reused !== undefined) {
+    } else if (reused !== undefined || isContainer) {
       yield* setupTracker.begin({
         threadId,
         branch: input.workspaceStrategy.branch ?? null,
-        baseRef: reused.baseRef,
-        stages: ["setup-script", "agent"],
+        baseRef: reused?.baseRef ?? null,
+        stages: [...(isContainer ? (["container"] as const) : []), "setup-script", "agent"],
         fiber: yield* Effect.fiber,
       });
     }
@@ -574,6 +636,15 @@ const make = Effect.gen(function* () {
           })
           .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
       }
+      if (isContainer) {
+        yield* setupTracker.stageStatus(threadId, "container", "running");
+        yield* containers
+          .ensure(threadId, {
+            onOutput: (line) => setupTracker.appendTail(threadId, "container", line),
+          })
+          .pipe(Effect.mapError(mapError(input, "prepare-container", threadId)));
+        yield* setupTracker.stageStatus(threadId, "container", "done");
+      }
       yield* setupTracker.stageStatus(threadId, "setup-script", "running");
       const setup = yield* setupScripts
         .runForThread({
@@ -774,7 +845,9 @@ const make = Effect.gen(function* () {
       const prepare = prepareInBackground(input, threadId, runId);
       if (
         runId === null ||
-        (input.workspaceStrategy.type !== "worktree" && input.reusedWorktree === undefined)
+        (input.workspaceStrategy.type !== "worktree" &&
+          input.reusedWorktree === undefined &&
+          !isContainerStrategy(input.workspaceStrategy))
       ) {
         return yield* prepare;
       }
@@ -877,6 +950,7 @@ const make = Effect.gen(function* () {
         if (input.reuseExistingThread === true && Option.isNone(launchReceipt)) {
           yield* validateReusableThread(input, candidateThreadId);
         }
+        yield* validateContainerStrategy(input, candidateThreadId, launchReceipt);
 
         const workspaceStrategy: ThreadLaunchWorkspaceStrategy =
           input.workspaceStrategy.type === "root" && Option.isNone(launchReceipt)
@@ -916,6 +990,7 @@ const make = Effect.gen(function* () {
                 interactionMode: input.interactionMode,
                 branch: initialBranch,
                 worktreePath: initialWorktreePath,
+                ...(isContainerStrategy(workspaceStrategy) ? { container: true } : {}),
                 ...(input.importedNativeThread === undefined
                   ? {}
                   : { importedNativeThread: input.importedNativeThread }),
@@ -1084,6 +1159,7 @@ const make = Effect.gen(function* () {
               type: "existing_worktree" as const,
               worktreePath: projection.thread.worktreePath,
               branch: projection.thread.branch,
+              ...(workspacePreparation.container === true ? { container: true } : {}),
             },
             reusedWorktree: { baseRef: workspacePreparation.baseRef },
           }

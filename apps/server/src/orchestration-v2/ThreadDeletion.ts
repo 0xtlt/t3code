@@ -220,6 +220,14 @@ export const planThreadDeletion = Effect.fn("ThreadDeletion.planThreadDeletion")
     threadId: command.threadId,
     request: { type: "preview.cleanup" },
   });
+  if (projection.thread.container === true) {
+    effects.push({
+      id: `effect:${command.commandId}:container.cleanup`,
+      commandId: command.commandId,
+      threadId: command.threadId,
+      request: { type: "container.cleanup", purge: true },
+    });
+  }
   const attachmentIds = Array.from(new Set(input.attachmentIds));
   if (attachmentIds.length > 0) {
     effects.push({

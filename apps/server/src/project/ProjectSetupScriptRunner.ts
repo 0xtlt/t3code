@@ -1,4 +1,4 @@
-import { ProjectId, type ProjectScript } from "@t3tools/contracts";
+import { ProjectId, ThreadId, type ProjectScript } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   projectScriptRuntimeEnv,
@@ -16,6 +16,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import { ThreadContainers } from "../container/ThreadContainers.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import * as ProjectService from "./ProjectService.ts";
@@ -185,10 +186,20 @@ export const make = Effect.gen(function* () {
   const terminalManager = yield* TerminalManager.TerminalManager;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const crypto = yield* Crypto.Crypto;
-  const completionShell = resolveCompletionShell(
+  const hostCompletionShell = resolveCompletionShell(
     yield* HostProcess.Platform,
     yield* HostProcess.Environment,
   );
+  const threadContainers = yield* Effect.serviceOption(ThreadContainers);
+  // A container terminal runs bash or sh whatever the host shell is.
+  const completionShellFor = (threadId: string) =>
+    Option.isNone(threadContainers)
+      ? Effect.succeed(hostCompletionShell)
+      : threadContainers.value
+          .isContainerThread(ThreadId.make(threadId))
+          .pipe(
+            Effect.map((container): CompletionShell => (container ? "posix" : hostCompletionShell)),
+          );
 
   const observeTerminalCompletion = (input: {
     readonly threadId: string;
@@ -366,6 +377,7 @@ export const make = Effect.gen(function* () {
     const completionToken = observe
       ? (yield* crypto.randomUUIDv4().pipe(Effect.orDie)).replaceAll("-", "")
       : null;
+    const completionShell = yield* completionShellFor(input.threadId);
     const commandLine =
       observe && completionToken
         ? wrapCommandForCompletion(

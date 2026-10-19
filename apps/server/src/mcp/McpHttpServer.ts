@@ -23,6 +23,7 @@ import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecuto
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
+import { SensitiveParameters, withoutParametersAttribute } from "./sensitiveParameters.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import { PreviewControlsToolkit } from "./toolkits/previewControls/tools.ts";
 import * as PreviewControlsHandlers from "./toolkits/previewControls/handlers.ts";
@@ -731,6 +732,26 @@ const registerHtmlPreview = Effect.fn("McpHttpServer.registerHtmlPreview")(funct
 });
 
 /**
+ * Hides the parameters of tools annotated {@link SensitiveParameters} from
+ * tracing. Delegates through the prototype because the service exposes its tool
+ * list as a live getter.
+ */
+const hideSensitiveParameters = (server: McpServer.McpServer["Service"]) =>
+  Object.create(server, {
+    addTool: {
+      value: (options: Parameters<McpServer.McpServer["Service"]["addTool"]>[0]) =>
+        server.addTool(
+          Context.get(options.annotations, SensitiveParameters)
+            ? {
+                ...options,
+                handle: (payload) => withoutParametersAttribute(options.handle(payload)),
+              }
+            : options,
+        ),
+    },
+  });
+
+/**
  * `McpServer.toolkit` asks for every service its tools declare when it
  * registers them, but the auth middleware provides `McpInvocationContext` to
  * each request instead. Registration must not get one: the services it
@@ -740,7 +761,11 @@ export const toolkitRegistration = <Tools extends Record<string, Tool.Any>, EX, 
   toolkit: Toolkit.Toolkit<Tools>,
   handlers: McpToolAccess.HandlersLayer<Tools, EX, RX>,
 ) => {
-  const registration = McpServer.toolkit(toolkit);
+  const registration = Layer.effectDiscard(
+    McpServer.registerToolkit(toolkit).pipe(
+      Effect.updateService(McpServer.McpServer, hideSensitiveParameters),
+    ),
+  ).pipe(Layer.provide(McpServer.McpServer.layer));
   // @effect-diagnostics-next-line unsafeEffectTypeAssertion:off - the auth middleware provides it per request.
   const registered = registration as Layer.Layer<
     never,

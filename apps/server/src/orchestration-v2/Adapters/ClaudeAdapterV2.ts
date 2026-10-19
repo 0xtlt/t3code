@@ -749,18 +749,23 @@ export const layerQueryRunner: Layer.Layer<
         // which lets the agent scope wrapper go in front of the CLI. The SDK
         // runs a script entry through node instead, so those launch unwrapped.
         const binaryPath = queryOptions.pathToClaudeCodeExecutable;
+        // A container thread always goes through the scope, whatever the host
+        // entry point is: the container runs its own `claude`, and the scope
+        // never lets the launch fall back to the host.
+        const containerized = yield* agentScope.inContainer(input.threadId);
         const launch =
-          binaryPath === undefined ||
-          CLAUDE_SCRIPT_EXTENSIONS.some((ext) => binaryPath.endsWith(ext))
-            ? undefined
-            : yield* agentScope.wrap({
-                command: binaryPath,
+          containerized ||
+          (binaryPath !== undefined &&
+            !CLAUDE_SCRIPT_EXTENSIONS.some((ext) => binaryPath.endsWith(ext)))
+            ? yield* agentScope.wrap({
+                command: binaryPath ?? "claude",
                 args: [],
                 name: "claude",
                 threadId: input.threadId,
                 env: queryOptions.env,
-              });
-        const options =
+              })
+            : undefined;
+        const launched =
           launch === undefined || launch.args.length === 0
             ? queryOptions
             : {
@@ -768,6 +773,16 @@ export const layerQueryRunner: Layer.Layer<
                 pathToClaudeCodeExecutable: launch.command,
                 executableArgs: [...launch.args, ...(queryOptions.executableArgs ?? [])],
               };
+        // Only the worktree is mounted; the host attachments directory is not there.
+        const options =
+          containerized && launched.additionalDirectories !== undefined
+            ? {
+                ...launched,
+                additionalDirectories: launched.additionalDirectories.filter(
+                  (directory) => directory === launched.cwd,
+                ),
+              }
+            : launched;
         // Windows has no process groups, so there the SDK spawns the CLI itself.
         const spawnClaudeCodeProcess =
           options.spawnClaudeCodeProcess ??
@@ -1195,6 +1210,7 @@ export const CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS: ReadonlyArray<string> = [
   "mcp__t3-code__t3_worktree_list",
   "mcp__t3-code__t3_project_list",
   "mcp__t3-code__t3_project_read",
+  "mcp__t3-code__t3_project_secret_list",
   "mcp__t3-code__t3_thread_search",
   "mcp__t3-code__t3_preview_list",
   "mcp__t3-code__t3_environment_read",

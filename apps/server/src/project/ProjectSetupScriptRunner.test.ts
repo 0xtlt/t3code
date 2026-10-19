@@ -1,11 +1,13 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, it, vi } from "@effect/vitest";
 import { ProjectId } from "@t3tools/contracts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
+import { makeFakeThreadContainers } from "../container/ThreadContainers.testkit.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ProjectService from "./ProjectService.ts";
@@ -176,4 +178,80 @@ it.effect("resolves setup scripts through the standalone project service", () =>
       terminalId: observedTerminalId,
     });
   }).pipe(Effect.provide(layer));
+});
+
+it.effect("wraps a container thread's setup script for the shell inside the container", () => {
+  const written: Array<{ readonly threadId: string; readonly data: string }> = [];
+  const projectId = ProjectId.make("project:setup-runner-container");
+  const project = {
+    id: projectId,
+    title: "Project",
+    workspaceRoot: "/repo",
+    repositoryIdentity: null,
+    faviconPath: null,
+    defaultModelSelection: null,
+    scripts: [
+      {
+        id: "setup",
+        name: "Setup",
+        command: "vp install",
+        icon: "configure" as const,
+        runOnWorktreeCreate: true,
+      },
+    ],
+    createdAt: "2026-06-20T00:00:00.000Z",
+    updatedAt: "2026-06-20T00:00:00.000Z",
+    deletedAt: null,
+  };
+  const fake = makeFakeThreadContainers({ containerThreads: ["container-thread"] });
+  const layer = ProjectSetupScriptRunner.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.mock(ProjectService.ProjectService)({
+          getById: () => Effect.succeed(Option.some(project)),
+        }),
+        Layer.mock(TerminalManager.TerminalManager)({
+          open: (input) =>
+            Effect.succeed({
+              threadId: input.threadId,
+              terminalId: input.terminalId,
+              cwd: input.cwd,
+              worktreePath: input.worktreePath ?? null,
+              status: "running" as const,
+              pid: 1,
+              history: "",
+              exitCode: null,
+              exitSignal: null,
+              label: "Shell",
+              updatedAt: "2026-06-20T00:00:00.000Z",
+            }),
+          write: (input) => Effect.sync(() => void written.push(input)),
+          subscribe: () => Effect.succeed(() => undefined),
+          closeIdle: () => Effect.void,
+        }),
+        ServerSettings.layerTest(),
+        NodeCrypto.layer,
+        fake.layer,
+      ),
+    ),
+  );
+
+  return Effect.gen(function* () {
+    const runner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+    for (const threadId of ["container-thread", "host-thread"]) {
+      yield* runner.runForThread({
+        threadId,
+        projectId,
+        worktreePath: "/repo-worktree",
+        observeCompletion: { onOutputLine: () => Effect.void },
+      });
+    }
+    // Fish is the host's shell; the container always runs bash or sh.
+    assert.match(written[0]?.data ?? "", /^\( vp install\r\); printf /);
+    assert.match(written[1]?.data ?? "", /^begin\rvp install\rend; printf /);
+  }).pipe(
+    Effect.provide(layer),
+    Effect.provideService(HostProcess.Platform, "linux"),
+    Effect.provideService(HostProcess.Environment, { SHELL: "/usr/bin/fish" }),
+  );
 });

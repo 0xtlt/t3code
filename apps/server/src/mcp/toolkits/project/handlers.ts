@@ -1,4 +1,11 @@
-import { MessageId, ThreadId, OrchestratorMcpFailure, ProjectId } from "@t3tools/contracts";
+import {
+  MessageId,
+  ThreadId,
+  OrchestratorMcpFailure,
+  ProjectId,
+  type ProjectSecretsError,
+  type SecretRequestError,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -7,6 +14,8 @@ import * as ThreadMessageIntake from "../../../orchestration-v2/ThreadMessageInt
 import * as Claims from "../../../orchestration-v2/AttachmentClaims.ts";
 import * as Project from "../../../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
+import * as ProjectSecrets from "../../../secrets/ProjectSecrets.ts";
+import * as SecretRequests from "../../../secrets/SecretRequests.ts";
 import * as Repositories from "../../../sourceControl/SourceControlRepositoryService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
@@ -23,6 +32,9 @@ function projectFailure(error: Project.ProjectServiceError) {
         : "The project is not empty; force=true is required to delete it.";
   return new OrchestratorMcpFailure({ code: "invalid_request", message });
 }
+
+const secretsFailure = (error: ProjectSecretsError | SecretRequestError) =>
+  new OrchestratorMcpFailure({ code: "invalid_request", message: error.message });
 
 /**
  * Without this check a launch could point an agent at any directory on the machine.
@@ -168,6 +180,15 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
                 message: error.message,
               });
             }
+            if (error._tag === "ThreadLaunchError" && error.operation === "validate-workspace") {
+              return new OrchestratorMcpFailure({
+                code: "invalid_request",
+                message:
+                  error.cause instanceof Error
+                    ? error.cause.message
+                    : "The workspace strategy is not valid.",
+              });
+            }
             return unavailable();
           }),
         );
@@ -259,9 +280,11 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
   t3_project_delete: McpToolAccess.writesEnvironment((input) =>
     Effect.gen(function* () {
       const projects = yield* Project.ProjectService;
-      return yield* projects
+      const deleted = yield* projects
         .delete({ ...input, commandId: yield* newCommandId() })
         .pipe(Effect.mapError(projectFailure));
+      yield* (yield* ProjectSecrets.ProjectSecrets).removeAll(input.projectId);
+      return deleted;
     }),
   ),
   t3_project_clone: McpToolAccess.writesEnvironment((input) =>
@@ -276,6 +299,38 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
             }),
         ),
       );
+    }),
+  ),
+  t3_project_secret_list: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      const secrets = yield* ProjectSecrets.ProjectSecrets;
+      return yield* secrets.list(input.projectId).pipe(Effect.mapError(secretsFailure));
+    }),
+  ),
+  t3_project_secret_set: McpToolAccess.writesEnvironment(({ secretRef, ...input }) =>
+    Effect.gen(function* () {
+      if (secretRef !== undefined && input.value !== undefined)
+        return yield* new OrchestratorMcpFailure({
+          code: "invalid_request",
+          message: "Pass either value or secretRef, not both.",
+        });
+      const secrets = yield* ProjectSecrets.ProjectSecrets;
+      const value =
+        secretRef === undefined
+          ? input.value
+          : yield* (yield* SecretRequests.SecretRequests)
+              .consume({ ref: secretRef, projectId: input.projectId })
+              .pipe(Effect.mapError(secretsFailure));
+      return yield* secrets
+        .set({ ...input, ...(value === undefined ? {} : { value }) })
+        .pipe(Effect.mapError(secretsFailure));
+    }),
+  ),
+  t3_project_secret_delete: McpToolAccess.writesEnvironment((input) =>
+    Effect.gen(function* () {
+      const secrets = yield* ProjectSecrets.ProjectSecrets;
+      yield* secrets.remove(input).pipe(Effect.mapError(secretsFailure));
+      return { name: input.name };
     }),
   ),
 });

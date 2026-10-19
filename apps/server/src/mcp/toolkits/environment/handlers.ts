@@ -11,6 +11,7 @@ import { EnvironmentToolkit } from "./tools.ts";
 export function preferences(settings: ServerSettings) {
   const {
     defaultThreadEnvMode,
+    defaultThreadContainer,
     newWorktreesStartFromOrigin,
     enableProviderUpdateChecks,
     backgroundActivity,
@@ -19,6 +20,7 @@ export function preferences(settings: ServerSettings) {
   const characters = Array.from(sourceControlWritingStyle.customInstructions);
   return {
     defaultThreadEnvMode,
+    defaultThreadContainer,
     newWorktreesStartFromOrigin,
     enableProviderUpdateChecks,
     backgroundActivity: { profile: backgroundActivity.profile },

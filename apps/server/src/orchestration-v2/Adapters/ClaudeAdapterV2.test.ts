@@ -46,6 +46,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
+import { AgentScope, type AgentScopeShape } from "@t3tools/shared/AgentScope";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -2044,6 +2045,68 @@ describe("ClaudeAdapterV2 MCP credential channel", () => {
       assert.equal(opened._tag, "Failure");
       assert.isTrue(cli.closed());
     }),
+  );
+});
+
+describe("ClaudeAdapterV2 container threads", () => {
+  const wrapped: Array<Parameters<AgentScopeShape["wrap"]>[0]> = [];
+  const containerScope = {
+    ...AgentScope.defaultValue(),
+    inContainer: () => Effect.succeed(true),
+    wrap: (input: Parameters<AgentScopeShape["wrap"]>[0]) =>
+      Effect.sync(() => {
+        wrapped.push(input);
+        return { command: "docker", args: ["exec", "-i", "t3-container", "claude"] };
+      }),
+  };
+
+  it.effect("always launches `claude` through the scope and keeps host-only directories out", () =>
+    Effect.gen(function* () {
+      const cli = makeFakeClaudeCli();
+      const runner = yield* ClaudeAdapterV2.ClaudeAgentSdkQueryRunner;
+      const session = yield* runner.open({
+        threadId: ThreadId.make("thread-claude-container"),
+        providerSessionId: ProviderSessionId.make("provider-session-claude-container"),
+        options: {
+          ...ClaudeAdapterV2.makeClaudeQueryOptions({
+            modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+            nativeThreadId: "native-thread-claude-container",
+            resume: false,
+            cwd: "/work/tree",
+            attachmentsDir: "/host/attachments",
+            environment: { PATH: "/usr/bin" },
+          }),
+          // A script entry would normally launch unwrapped, through node on the host.
+          pathToClaudeCodeExecutable: "/opt/claude/cli.js",
+          spawnClaudeCodeProcess: cli.spawn,
+        },
+      });
+      yield* session.close;
+
+      assert.deepEqual(wrapped, [
+        {
+          command: "/opt/claude/cli.js",
+          args: [],
+          name: "claude",
+          threadId: "thread-claude-container",
+          env: { PATH: "/usr/bin" },
+        },
+      ]);
+      const spawn = cli.spawns[0]!;
+      assert.equal(spawn.command, "docker");
+      assert.deepEqual(spawn.args.slice(0, 4), ["exec", "-i", "t3-container", "claude"]);
+      const flags = spawn.args.join(" ");
+      assert.include(flags, "/work/tree");
+      assert.notInclude(flags, "/host/attachments");
+    }).pipe(
+      Effect.provide(ClaudeAdapterV2.layerQueryRunner),
+      Effect.provideService(
+        ProviderEventLoggers.ProviderEventLoggers,
+        ProviderEventLoggers.NoOpProviderEventLoggers,
+      ),
+      Effect.provideService(AgentScope, containerScope),
+      Effect.provide(NodeServices.layer),
+    ),
   );
 });
 

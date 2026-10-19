@@ -30,7 +30,7 @@ const snoozedAt = DateTime.makeUnsafe("2026-07-24T09:05:00.000Z");
 const snoozedUntil = DateTime.makeUnsafe("2026-07-25T09:00:00.000Z");
 const forkCreatedAt = DateTime.makeUnsafe("2026-07-24T09:10:00.000Z");
 
-function makeSourceThread(): OrchestrationV2AppThread {
+function makeSourceThread(container = false): OrchestrationV2AppThread {
   return {
     createdBy: "user",
     creationSource: "web",
@@ -43,6 +43,7 @@ function makeSourceThread(): OrchestrationV2AppThread {
     interactionMode: "plan",
     branch: "feature/source",
     worktreePath: "/tmp/source-worktree",
+    ...(container ? { container } : {}),
     activeProviderThreadId: ProviderThreadId.make("provider-thread:fork-snoozed-source"),
     lineage: {
       parentThreadId: null,
@@ -83,9 +84,12 @@ function makeSourceRun(status: OrchestrationV2Run["status"]): OrchestrationV2Run
   };
 }
 
-function makeSourceProjection(sourceRun: OrchestrationV2Run): OrchestrationV2ThreadProjection {
+function makeSourceProjection(
+  sourceRun: OrchestrationV2Run,
+  container = false,
+): OrchestrationV2ThreadProjection {
   return {
-    thread: makeSourceThread(),
+    thread: makeSourceThread(container),
     runs: [sourceRun],
     attempts: [],
     nodes: [],
@@ -106,11 +110,11 @@ function makeSourceProjection(sourceRun: OrchestrationV2Run): OrchestrationV2Thr
   };
 }
 
-const planFork = (sourceRun: OrchestrationV2Run) =>
+const planFork = (sourceRun: OrchestrationV2Run, container = false) =>
   Effect.gen(function* () {
     const service = yield* ThreadForkService.ThreadForkServiceV2;
     return yield* service.plan({
-      sourceProjection: makeSourceProjection(sourceRun),
+      sourceProjection: makeSourceProjection(sourceRun, container),
       sourceRun,
       sourceProviderThread: undefined,
       canonicalSourcePoint: {
@@ -189,5 +193,14 @@ it.effect("rejects in-progress and rolled-back fork sources", () =>
       assert.equal(error.targetThreadId, targetThreadId);
       assert.equal(error.cause, ThreadForkService.forkableSourceRunStatusError(sourceRun));
     }
+  }),
+);
+
+it.effect("keeps a fork of a container thread a container thread", () =>
+  Effect.gen(function* () {
+    const forked = yield* planFork(makeSourceRun("completed"), true);
+    assert.isTrue(forked.targetThread.container);
+    assert.equal(forked.targetThread.worktreePath, makeSourceThread().worktreePath);
+    assert.isUndefined((yield* planFork(makeSourceRun("completed"))).targetThread.container);
   }),
 );

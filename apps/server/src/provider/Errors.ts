@@ -25,3 +25,12 @@ export class ProviderWorkspaceMissingError extends Schema.TaggedError<ProviderWo
     return `This thread's workspace folder no longer exists or is not a directory: ${this.cwd}. Restore the folder at this path before retrying.`;
   }
 }
+
+/** A container thread's provider can't start: unsupported provider, or the container itself failed. */
+export class ProviderContainerError extends Schema.TaggedError<ProviderContainerError>()(
+  "ProviderContainerError",
+  {
+    threadId: Schema.String,
+    message: Schema.String,
+  },
+) {}

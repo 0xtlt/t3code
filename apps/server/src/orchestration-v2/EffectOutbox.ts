@@ -100,6 +100,11 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
     type: Schema.Literal("preview.cleanup"),
   }),
   Schema.Struct({
+    type: Schema.Literal("container.cleanup"),
+    /** Also remove the home volume (thread deleted); archive keeps it for unarchive. */
+    purge: Schema.Boolean,
+  }),
+  Schema.Struct({
     type: Schema.Literal("attachment.cleanup"),
     attachmentIds: Schema.Array(Schema.String),
   }),
@@ -124,6 +129,7 @@ export const REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS = [
   "checkpoint.capture",
   "terminal.cleanup",
   "preview.cleanup",
+  "container.cleanup",
   "attachment.cleanup",
   "thread-title.generate",
   "delegated-tasks.stop",

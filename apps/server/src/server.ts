@@ -5,6 +5,8 @@ import * as Random from "effect/Random";
 import * as Semaphore from "effect/Semaphore";
 import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
+import * as ThreadContainers from "./container/ThreadContainers.ts";
+import * as ContainerThreadControl from "./orchestration-v2/ContainerThreadControl.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchReactor.ts";
 import * as DelegatedTaskQuestionReactor from "./orchestration-v2/DelegatedTaskQuestionReactor.ts";
@@ -34,6 +36,7 @@ import { guardHttpResponseWriteErrors } from "./httpResponseErrorGuard.ts";
 import { fixPath } from "./os-jank.ts";
 import * as Ws from "./ws.ts";
 import * as AgentScopeLive from "./process/agentScope.ts";
+import * as ContainerAgentScope from "./container/ContainerAgentScope.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as NodePtyAdapter from "./terminal/NodePtyAdapter.ts";
 import * as PullRequestHttp from "./pullRequest/http.ts";
@@ -74,6 +77,10 @@ import * as DesktopBrowserChannel from "./preview/DesktopBrowserChannel.ts";
 import * as ServerBrowserStream from "./preview/ServerBrowserStream.ts";
 import * as PreviewBrowser from "./preview/PreviewBrowser.ts";
 import * as ProcessRunner from "./processRunner.ts";
+import * as ProjectSecrets from "./secrets/ProjectSecrets.ts";
+import * as ProjectSecretsKey from "./secrets/ProjectSecretsKey.ts";
+import { makeThreadValueRedactor } from "./secrets/redactValue.ts";
+import * as ProjectStoreV2 from "./orchestration-v2/ProjectStore.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as Keybindings from "./keybindings.ts";
@@ -198,29 +205,6 @@ const layerResourceAttribution = ResourceAttribution.layer;
 const layerApplicationObservability = EventLoopMonitor.layer.pipe(
   Layer.provideMerge(Observability.layer),
   Layer.provideMerge(layerResourceAttribution),
-);
-
-// One rotating store behind both logger views, so driver instances never race
-// its rotation.
-const layerProviderEventLoggers = Layer.effect(
-  ProviderEventLoggers.ProviderEventLoggers,
-  Effect.gen(function* () {
-    const { providerEventLogPath } = yield* ServerConfig.ServerConfig;
-    const attribution = yield* ResourceAttribution.ResourceAttribution;
-    const store = yield* EventNdjsonLogger.makeEventNdjsonLogStore(providerEventLogPath, {
-      attribution,
-    }).pipe(
-      Effect.catch((error) =>
-        Effect.logWarning(error.message, { error }).pipe(
-          Effect.annotateLogs({ scope: "provider-observability" }),
-          Effect.as(undefined),
-        ),
-      ),
-    );
-    if (!store) return ProviderEventLoggers.NoOpProviderEventLoggers;
-    yield* Effect.addFinalizer(() => store.close());
-    return { native: store.logger("native"), canonical: store.logger("canonical") };
-  }),
 );
 
 const layerPtyAdapter = NodePtyAdapter.layer;
@@ -482,12 +466,55 @@ const layerScheduledTaskWebhookOrigin = Layer.effect(
   }),
 );
 
+const layerProjectSecrets = ProjectSecrets.layer.pipe(
+  Layer.provide(ProjectSecretsKey.layer),
+  Layer.provide(ProjectStoreV2.layer),
+);
+
+// One rotating store behind both logger views, so driver instances never race
+// its rotation.
+const layerProviderEventLoggers = Layer.effect(
+  ProviderEventLoggers.ProviderEventLoggers,
+  Effect.gen(function* () {
+    const { providerEventLogPath } = yield* ServerConfig.ServerConfig;
+    const attribution = yield* ResourceAttribution.ResourceAttribution;
+    const projectSecrets = yield* ProjectSecrets.ProjectSecrets;
+    const store = yield* EventNdjsonLogger.makeEventNdjsonLogStore(providerEventLogPath, {
+      attribution,
+      // Adapters log protocol frames verbatim, so a container thread's tool
+      // output and messages carry its secrets unless they are masked here.
+      redactEvent: makeThreadValueRedactor(projectSecrets),
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.logWarning(error.message, { error }).pipe(
+          Effect.annotateLogs({ scope: "provider-observability" }),
+          Effect.as(undefined),
+        ),
+      ),
+    );
+    if (!store) return ProviderEventLoggers.NoOpProviderEventLoggers;
+    yield* Effect.addFinalizer(() => store.close());
+    return { native: store.logger("native"), canonical: store.logger("canonical") };
+  }),
+  // Memoized with the orchestration runtime's instance, which primes the values.
+).pipe(Layer.provide(layerProjectSecrets));
+
+// One constant, provided to the orchestration runtime, ResourceCleanupService,
+// and the runtime core, so layer memoization keeps a single instance (its
+// per-thread locks and caches must be shared).
+const layerThreadContainers = ThreadContainers.layer.pipe(
+  Layer.provide(layerProjectSecrets),
+  Layer.provide(ProjectionStoreV2.layer),
+  Layer.provide(T3ProjectFileLoader.layer),
+);
+
 const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
+  Layer.provide(layerThreadContainers),
   Layer.provide(layerScheduledTaskWebhookOrigin),
   Layer.provide(ProviderEventIngestor.layerAnalytics),
   Layer.provide(layerCheckpointStore),
   Layer.provide(layerGitWorkflow),
-  Layer.provide(ResourceCleanupService.layer),
+  Layer.provide(ResourceCleanupService.layer.pipe(Layer.provide(layerThreadContainers))),
   Layer.provide(
     RunFinalizationService.layerObserver.pipe(
       Layer.provide(ProjectionStoreV2.layer),
@@ -500,6 +527,7 @@ const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
 const layerOrchestrationApplication = CheckpointDiffQuery.layer.pipe(
   Layer.provideMerge(layerCheckpointStore),
   Layer.provideMerge(layerOrchestrationV2Runtime),
+  Layer.provideMerge(layerProjectSecrets),
 );
 
 const layerThreadSettlementWorker = Layer.effectDiscard(
@@ -584,7 +612,17 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   layerProviderInstallationRefresh,
   ReplayMarkers.layer,
   Layer.effectDiscard(ProjectSettingsOverrideSweep.sweep),
+  // Removes containers whose thread is gone or archived. Forked: the engine may
+  // be slow or absent and must not hold up startup.
+  Layer.effectDiscard(
+    ThreadContainers.ThreadContainers.pipe(
+      Effect.flatMap((containers) => Effect.forkScoped(containers.reconcile)),
+    ),
+  ),
+  ContainerAgentScope.layerBind,
+  ContainerThreadControl.layer,
 ).pipe(
+  Layer.provideMerge(layerThreadContainers),
   Layer.provideMerge(layerOrchestrationApplication),
   Layer.provideMerge(RuntimeLayer.layerEventInfrastructure),
   Layer.provideMerge(Layer.merge(ProjectStore.layer, ThreadSearch.layer)),
@@ -1061,7 +1099,8 @@ const layerMakeServer = Layer.unwrap(
       Layer.provide(layerApplicationObservability),
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provide(VcsProcess.layer),
-      Layer.provideMerge(AgentScopeLive.layer),
+      Layer.provideMerge(ContainerAgentScope.layer.pipe(Layer.provide(AgentScopeLive.layer))),
+      Layer.provideMerge(ContainerAgentScope.layerLink),
       Layer.provideMerge(layerPlatformServices),
     );
   }),

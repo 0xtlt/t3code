@@ -119,11 +119,13 @@ import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
 import * as CommandOutputHub from "./orchestration-v2/CommandOutputHub.ts";
 import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
+import * as ContainerThreadControl from "./orchestration-v2/ContainerThreadControl.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
+import * as ProjectSecrets from "./secrets/ProjectSecrets.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import {
   archivedShellStreamItemFromThreadShell,
@@ -185,6 +187,7 @@ import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
+import * as ThreadContainers from "./container/ThreadContainers.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
 import {
@@ -1201,6 +1204,7 @@ const layerWsRpc = (
       const providerSessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const secretRequests = yield* SecretRequests.SecretRequests;
+      const projectSecrets = yield* ProjectSecrets.ProjectSecrets;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
@@ -1244,6 +1248,8 @@ const layerWsRpc = (
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
       const terminalManager = yield* TerminalManager.TerminalManager;
       const previewManager = yield* PreviewManager.PreviewManager;
+      const threadContainers = yield* ThreadContainers.ThreadContainers;
+      const containerThreadControl = yield* ContainerThreadControl.ContainerThreadControl;
       const portDiscovery = yield* PortScanner.PortDiscovery;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
       const modelManifest = yield* ModelManifest.ModelManifest;
@@ -1784,8 +1790,10 @@ const layerWsRpc = (
 
       const mutateProject = Effect.fn("ws.projects.mutate")(function* (mutation: ProjectMutation) {
         const result = yield* projectMutationOperation(projectService, mutation);
-        if (mutation.type === "project.delete")
+        if (mutation.type === "project.delete") {
           yield* projectCloneTracker.discard(mutation.projectId);
+          yield* projectSecrets.removeAll(mutation.projectId);
+        }
         return result;
       });
 
@@ -1991,7 +1999,10 @@ const layerWsRpc = (
                       new OrchestrationV2ThreadLaunchError({
                         commandId: input.commandId,
                         projectId: input.projectId,
-                        message: "Failed to launch thread",
+                        message:
+                          cause.operation === "validate-workspace" && cause.cause instanceof Error
+                            ? cause.cause.message
+                            : "Failed to launch thread",
                         cause,
                       }),
                     ServerRuntimeStartupError: (cause) =>
@@ -2884,6 +2895,14 @@ const layerWsRpc = (
         [WS_METHODS.previewRefresh]: (input) => previewManager.refresh(input),
         [WS_METHODS.previewClose]: (input) => previewManager.close(input),
         [WS_METHODS.previewList]: (input) => previewManager.list(input),
+        [WS_METHODS.containerEngineStatus]: () => threadContainers.engineStatus,
+        [WS_METHODS.containerThreadStatus]: (input) => threadContainers.status(input.threadId),
+        [WS_METHODS.containerStopThread]: (input) => containerThreadControl.stop(input.threadId),
+        [WS_METHODS.containerRebuildThread]: (input) =>
+          containerThreadControl.rebuild(input.threadId),
+        [WS_METHODS.projectSecretsList]: (input) => projectSecrets.list(input.projectId),
+        [WS_METHODS.projectSecretsSet]: (input) => projectSecrets.set(input),
+        [WS_METHODS.projectSecretsRemove]: (input) => projectSecrets.remove(input),
         [WS_METHODS.previewClearProfile]: (input) => serverBrowser.clearProfile(input.profileId),
         [WS_METHODS.previewReportProfiles]: (input) => serverBrowser.reportProfiles(input),
         [WS_METHODS.previewReportStatus]: (input) => previewManager.reportStatus(input),

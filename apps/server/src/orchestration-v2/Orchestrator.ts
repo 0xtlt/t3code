@@ -856,20 +856,21 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly providerInstanceId: ProviderInstanceId;
     readonly threadId: ThreadId;
   }) =>
-    input.adapter.getCapabilities().pipe(
-      Effect.flatMap((capabilities) =>
-        capabilities.sessions.supportsMultipleProviderThreadsPerSession
-          ? Effect.succeed(
-              idAllocator.derive.providerSession({
-                providerInstanceId: input.providerInstanceId,
-              }),
-            )
-          : idAllocator.allocate.providerSession({
-              providerInstanceId: input.providerInstanceId,
-              threadId: input.threadId,
-            }),
-      ),
-    );
+    Effect.gen(function* () {
+      const capabilities = yield* input.adapter.getCapabilities();
+      // A container thread's provider process lives in its own container, so it
+      // never shares a session (and its process) with the instance's other threads.
+      const container = yield* projectionStore.getThread(input.threadId).pipe(
+        Effect.map((thread) => thread.container === true),
+        Effect.catchTags({ ProjectionStoreThreadNotFoundError: () => Effect.succeed(false) }),
+      );
+      return capabilities.sessions.supportsMultipleProviderThreadsPerSession && !container
+        ? idAllocator.derive.providerSession({ providerInstanceId: input.providerInstanceId })
+        : yield* idAllocator.allocate.providerSession({
+            providerInstanceId: input.providerInstanceId,
+            threadId: input.threadId,
+          });
+    });
 
   const enforceCommandPolicy =
     (command: OrchestrationV2Command) =>
@@ -2240,6 +2241,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       interactionMode: command.interactionMode,
       branch: command.branch,
       worktreePath: command.worktreePath,
+      ...(command.container === true ? { container: true } : {}),
       activeProviderThreadId: null,
       lineage: {
         parentThreadId: null,
@@ -3467,6 +3469,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           threadId: command.threadId,
           request: { type: "terminal.cleanup" },
         } satisfies PendingOrchestrationEffectV2,
+        ...(thread.container === true
+          ? [
+              {
+                id: `effect:${command.commandId}:container.cleanup`,
+                commandId: command.commandId,
+                threadId: command.threadId,
+                request: { type: "container.cleanup", purge: false },
+              } satisfies PendingOrchestrationEffectV2,
+            ]
+          : []),
       ]);
     }
   });

@@ -23,6 +23,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as CheckpointRollbackService from "./CheckpointRollbackService.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EffectWorker from "./EffectWorker.ts";
+import * as ResourceCleanupService from "./ResourceCleanupService.ts";
 import * as RunFinalizationService from "./RunFinalizationService.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ProviderTurnControlService from "./ProviderTurnControlService.ts";
@@ -83,9 +84,16 @@ function layerExecutorFor(input: {
   readonly threads?: Partial<ThreadManagementService.ThreadManagementService["Service"]>;
   readonly continueAfterRestart?: boolean;
   readonly interrupt?: ProviderTurnControlService.ProviderTurnControlServiceV2Shape["interrupt"];
+  readonly cleanupContainer?: (threadId: string, purge: boolean) => Effect.Effect<void>;
 }) {
   const record = (event: string) => Ref.update(input.events, (events) => [...events, event]);
   const layerDependencies = Layer.mergeAll(
+    Layer.succeed(ResourceCleanupService.ResourceCleanupService, {
+      cleanupTerminals: () => Effect.void,
+      cleanupPreviews: () => Effect.void,
+      cleanupAttachments: () => Effect.void,
+      cleanupContainer: input.cleanupContainer ?? (() => Effect.void),
+    }),
     Layer.succeed(
       ProviderTurnControlService.ProviderTurnControlServiceV2,
       ProviderTurnControlService.ProviderTurnControlServiceV2.of({
@@ -228,6 +236,26 @@ it.effect("settles a stopped run when its adapter has already lost the native tu
       });
     }).pipe(Effect.provide(layer));
     assert.deepEqual(yield* Ref.get(events), ["thread.background-work.settle"]);
+  }),
+);
+
+it.effect.each([true, false])("runs container.cleanup with purge=%s", (purge) =>
+  Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    const events = yield* Ref.make<ReadonlyArray<string>>([]);
+    const layer = layerExecutorFor({
+      events,
+      cleanupContainer: (cleanedThread, cleanedPurge) =>
+        Ref.update(events, (current) => [...current, `container:${cleanedThread}:${cleanedPurge}`]),
+    });
+    yield* Effect.gen(function* () {
+      const executor = yield* EffectWorker.OrchestrationEffectExecutorV2;
+      yield* executor.execute({
+        ...restartEffect(now, { type: "detach" }),
+        request: { type: "container.cleanup", purge },
+      });
+    }).pipe(Effect.provide(layer));
+    assert.deepEqual(yield* Ref.get(events), [`container:${threadId}:${purge}`]);
   }),
 );
 

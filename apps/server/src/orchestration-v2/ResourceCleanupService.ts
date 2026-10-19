@@ -6,6 +6,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
 import { resolveAttachmentPathById } from "../attachmentStore.ts";
+import * as ThreadContainers from "../container/ThreadContainers.ts";
 import * as ServerConfig from "../config.ts";
 import * as PreviewManager from "../preview/Manager.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
@@ -26,11 +27,16 @@ export class ResourceCleanupService extends Context.Reference<{
   readonly cleanupAttachments: (
     attachmentIds: ReadonlyArray<string>,
   ) => Effect.Effect<void, ResourceCleanupError>;
+  readonly cleanupContainer: (
+    threadId: string,
+    purge: boolean,
+  ) => Effect.Effect<void, ResourceCleanupError>;
 }>("t3/orchestration-v2/ResourceCleanupService", {
   defaultValue: () => ({
     cleanupTerminals: () => Effect.void,
     cleanupPreviews: () => Effect.void,
     cleanupAttachments: () => Effect.void,
+    cleanupContainer: () => Effect.void,
   }),
 }) {}
 
@@ -39,6 +45,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const terminals = yield* TerminalManager.TerminalManager;
     const previews = yield* PreviewManager.PreviewManager;
+    const containers = yield* ThreadContainers.ThreadContainers;
     const fileSystem = yield* FileSystem.FileSystem;
     const config = yield* ServerConfig.ServerConfig;
     return {
@@ -58,6 +65,8 @@ export const layer = Layer.effect(
               (cause) => new ResourceCleanupError({ operation: "preview", threadId, cause }),
             ),
           ),
+      cleanupContainer: (threadId: string, purge: boolean) =>
+        containers.remove(ThreadId.make(threadId), { purge }),
       cleanupAttachments: (attachmentIds: ReadonlyArray<string>) =>
         Effect.forEach(
           attachmentIds,

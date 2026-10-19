@@ -297,3 +297,27 @@ it.effect("queues provider and resource cleanup and preserves an earlier deletio
     );
   }).pipe(Effect.provide(IdAllocator.layer)),
 );
+
+it.effect("purges the container of a deleted container thread and leaves host threads alone", () =>
+  Effect.gen(function* () {
+    const base = makeProjection();
+    const allocator = yield* IdAllocator.IdAllocatorV2;
+    const requests = (container: boolean) =>
+      planThreadDeletion({
+        command,
+        projection: { ...base, thread: { ...base.thread, ...(container ? { container } : {}) } },
+        attachmentIds: [],
+        now: deletedAt,
+        idAllocator: allocator,
+      }).pipe(Effect.map((result) => result.effects.map((effect) => effect.request)));
+    assert.deepEqual(yield* requests(true), [
+      { type: "terminal.cleanup" },
+      { type: "preview.cleanup" },
+      { type: "container.cleanup", purge: true },
+    ]);
+    assert.deepEqual(yield* requests(false), [
+      { type: "terminal.cleanup" },
+      { type: "preview.cleanup" },
+    ]);
+  }).pipe(Effect.provide(IdAllocator.layer)),
+);

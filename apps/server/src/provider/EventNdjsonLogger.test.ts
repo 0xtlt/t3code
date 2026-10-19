@@ -17,6 +17,7 @@ import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ResourceAttribution from "../resourceTelemetry/ResourceAttribution.ts";
+import { makeThreadValueRedactor } from "../secrets/redactValue.ts";
 import {
   makeEventNdjsonLogger,
   makeEventNdjsonLogStore,
@@ -54,6 +55,64 @@ function parseLogLine(line: string) {
 }
 
 it.layer(NodeServices.layer)("EventNdjsonLogger", (it) => {
+  it.effect("masks a thread's secret values in every string before writing", () => {
+    const secretThread = ThreadId.make("thread-with-secrets");
+    const otherThread = ThreadId.make("thread-without-secrets");
+    // A multi-line value is escaped in JSON, so only a walk of the event can match it.
+    const secret = '-----BEGIN KEY-----\nline "two"\n-----END KEY-----';
+    const redactEvent = makeThreadValueRedactor({
+      hasSecrets: (threadId) => threadId === secretThread,
+      redact: (_threadId, text) => text.replaceAll(secret, "••••••"),
+    });
+    const event = {
+      method: "item/completed",
+      params: {
+        item: {
+          type: "commandExecution",
+          aggregatedOutput: `token=${secret}\n`,
+          nested: [{ text: secret }],
+        },
+      },
+    };
+
+    return Effect.gen(function* () {
+      const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-log-"));
+      const basePath = NodePath.join(tempDir, "provider-native.ndjson");
+      try {
+        const logger = yield* makeEventNdjsonLogger(basePath, { stream: "native", redactEvent });
+        assert.exists(logger);
+        if (!logger) return;
+        yield* logger.write(event, secretThread);
+        yield* logger.write(event, otherThread);
+        yield* logger.write(event, null);
+        yield* logger.close();
+
+        const read = (segment: string) =>
+          NodeFS.readFileSync(ownedLogPath(basePath, segment), "utf8");
+        const masked = parseLogLine(read("thread-with-secrets").trim());
+        assert.notInclude(masked.payload, "BEGIN KEY");
+        assert.deepEqual(decodeUnknownJson(masked.payload), {
+          method: "item/completed",
+          params: {
+            item: {
+              type: "commandExecution",
+              aggregatedOutput: "token=••••••\n",
+              nested: [{ text: "••••••" }],
+            },
+          },
+        });
+        // Threads without secrets, and global events, are written as they came.
+        for (const segment of ["thread-without-secrets", "_global"]) {
+          assert.deepEqual(decodeUnknownJson(parseLogLine(read(segment).trim()).payload), event);
+        }
+        // The caller's event is not mutated.
+        assert.include(event.params.item.aggregatedOutput, secret);
+      } finally {
+        NodeFS.rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+  });
+
   it.effect("summarizes circular events without exposing their contents in diagnostics", () => {
     const messages: Array<unknown> = [];
     const logCapture = Logger.make<unknown, void>(({ message }) => {

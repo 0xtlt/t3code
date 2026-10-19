@@ -81,6 +81,12 @@ export interface EventNdjsonLogStoreOptions {
   readonly maxBufferedBytes?: number;
   readonly maxBufferedRecords?: number;
   readonly attribution?: ResourceAttribution.ResourceAttribution["Service"];
+  /**
+   * Masks values that must never reach the log, such as a container thread's
+   * project secrets. Runs on every record of a thread before it is bounded and
+   * serialized, so it has to be cheap for threads with nothing to mask.
+   */
+  readonly redactEvent?: (event: unknown, threadId: ThreadId) => unknown;
 }
 
 export interface EventNdjsonLoggerOptions extends EventNdjsonLogStoreOptions {
@@ -127,6 +133,7 @@ interface ResolvedOptions {
   readonly maxBufferedBytes: number;
   readonly maxBufferedRecords: number;
   readonly attribution: ResourceAttribution.ResourceAttribution["Service"] | undefined;
+  readonly redactEvent: EventNdjsonLogStoreOptions["redactEvent"];
 }
 
 export interface PendingRecord {
@@ -504,6 +511,7 @@ function resolveOptions(
     maxBufferedBytes: options.maxBufferedBytes ?? DEFAULT_MAX_BUFFERED_BYTES,
     maxBufferedRecords: options.maxBufferedRecords ?? DEFAULT_MAX_BUFFERED_RECORDS,
     attribution: options.attribution,
+    redactEvent: options.redactEvent,
   } satisfies ResolvedOptions;
 
   const validations = [
@@ -760,11 +768,13 @@ export const makeEventNdjsonLogStore = Effect.fnUntraced(function* (
 
     const write = Effect.fnUntraced(function* (event: unknown, threadId: ThreadId | null) {
       if (!shouldPersistProviderEvent(stream, event)) return;
-      let payload = yield* serializeEvent(boundProviderEventForLogging(event));
+      const loggable =
+        threadId !== null && resolved.redactEvent ? resolved.redactEvent(event, threadId) : event;
+      let payload = yield* serializeEvent(boundProviderEventForLogging(loggable));
       if (payload === undefined) return;
       // Escaping can expand strings beyond their input size.
       if (Buffer.byteLength(payload) > MAX_RECORD_CHARACTERS) {
-        payload = yield* serializeEvent(summarizeProviderEvent(event));
+        payload = yield* serializeEvent(summarizeProviderEvent(loggable));
         if (payload === undefined) return;
       }
 

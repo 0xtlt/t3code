@@ -12,6 +12,7 @@ import {
   ServerSettingsError,
   TerminalProviderInstanceNotFoundError,
 } from "@t3tools/contracts";
+import { AgentScope, type AgentScopeShape } from "@t3tools/shared/AgentScope";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Data from "effect/Data";
 import * as Clock from "effect/Clock";
@@ -42,6 +43,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import { ProjectSecrets } from "../secrets/ProjectSecrets.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TerminalManager from "./Manager.ts";
 import * as PtyAdapter from "@t3tools/shared/PtyAdapter";
@@ -327,6 +329,18 @@ const createManager = (
       };
     }),
   );
+
+const secret = "hunter2";
+const secrets = Layer.mock(ProjectSecrets)({
+  redact: (_threadId, text) => text.replaceAll(secret, "***"),
+  hasSecrets: () => false,
+  pendingSecretPrefix: (_threadId, text) => {
+    for (let length = Math.min(secret.length - 1, text.length); length > 0; length--) {
+      if (secret.startsWith(text.slice(text.length - length))) return length;
+    }
+    return 0;
+  },
+});
 
 const layerWithHostPlatform = (platform: NodeJS.Platform) =>
   Layer.succeed(HostProcess.Platform, platform);
@@ -1479,6 +1493,56 @@ it.layer(
       expect(reopened.history).toBe("\nline3-continued\nline4");
     }),
   );
+
+  it.effect("masks a project secret in terminal output, even split across chunks", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter, getEvents } = yield* createManager();
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0]!;
+      for (const chunk of ["tok=hun", "ter", "2 end\n"]) process.emitData(chunk);
+      yield* manager.close({ threadId: "thread-1" });
+
+      const streamed = (yield* getEvents)
+        .flatMap((event) => (event.type === "output" ? [event.data] : []))
+        .join("");
+      expect(streamed).toBe("tok=*** end\n");
+      expect((yield* manager.open(openInput())).history).toBe("tok=*** end\n");
+    }).pipe(Effect.provide(secrets)),
+  );
+
+  it.effect("releases a held tail that turns out not to be a secret", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter, getEvents } = yield* createManager();
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0]!;
+      for (const chunk of ["a hun", "gry\n"]) process.emitData(chunk);
+      yield* manager.close({ threadId: "thread-1" });
+
+      const streamed = (yield* getEvents)
+        .flatMap((event) => (event.type === "output" ? [event.data] : []))
+        .join("");
+      expect(streamed).toBe("a hungry\n");
+    }).pipe(Effect.provide(secrets)),
+  );
+
+  it.effect("gives the agent scope the thread only when it runs in a container", () => {
+    const wrapped: Array<string | undefined> = [];
+    const scope = {
+      ...AgentScope.defaultValue(),
+      inContainer: (threadId: string) => Effect.succeed(threadId === "container-thread"),
+      wrap: (input: Parameters<AgentScopeShape["wrap"]>[0]) =>
+        Effect.sync(() => {
+          wrapped.push(input.threadId);
+          return { command: input.command, args: input.args };
+        }),
+    };
+    return Effect.gen(function* () {
+      const { manager } = yield* createManager();
+      yield* manager.open(openInput({ threadId: "container-thread" }));
+      yield* manager.open(openInput({ threadId: "host-thread" }));
+      expect(wrapped).toEqual(["container-thread", undefined]);
+    }).pipe(Effect.provideService(AgentScope, scope));
+  });
 
   it.effect("bounds persisted and attached history without truncating live output", () =>
     Effect.gen(function* () {

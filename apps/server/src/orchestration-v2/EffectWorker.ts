@@ -481,6 +481,17 @@ export const layerExecutor: Layer.Layer<
                   }),
               ),
             );
+          case "container.cleanup":
+            return resourceCleanup.cleanupContainer(effect.threadId, effect.request.purge).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationEffectExecutionError({
+                    effectId: effect.id,
+                    effectType: effect.request.type,
+                    cause,
+                  }),
+              ),
+            );
           case "attachment.cleanup":
             return resourceCleanup.cleanupAttachments(effect.request.attachmentIds).pipe(
               Effect.mapError(
